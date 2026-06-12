@@ -1,0 +1,69 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      ENV: development
+      PORT: "8080"
+      DATABASE_URL: postgres://memoria:memoria@postgres:5432/memoria?sslmode=disable
+      JWT_SECRET: ${JWT_SECRET:-dev-only-secret-do-not-use-in-prod}
+      # SMTP values come from .env (compose loads it automatically)
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      S3_ENDPOINT: http://minio:9000
+      S3_PUBLIC_ENDPOINT: http://localhost:9000
+      S3_ACCESS_KEY: memoria
+      S3_SECRET_KEY: memoria-secret
+      S3_BUCKET: memoria-media
+      S3_USE_PATH_STYLE: "true"
+      REVENUECAT_WEBHOOK_SECRET: ${REVENUECAT_WEBHOOK_SECRET:-dev-revenuecat-webhook-secret}
+      REVENUECAT_PRODUCT_PLUS: ${REVENUECAT_PRODUCT_PLUS:-memoria_plus}
+      REVENUECAT_PRODUCT_PRO: ${REVENUECAT_PRODUCT_PRO:-memoria_pro}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: memoria
+      POSTGRES_PASSWORD: memoria
+      POSTGRES_DB: memoria
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U memoria -d memoria"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  # Local stand-in for Cloudflare R2 (S3-compatible). Used from Phase B2 on.
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: memoria
+      MINIO_ROOT_PASSWORD: memoria-secret
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:
+  miniodata:

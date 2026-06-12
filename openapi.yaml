@@ -1,0 +1,840 @@
+openapi: 3.1.0
+info:
+  title: Memoria API
+  version: 1.0.0
+  description: Private photo/video sharing API (Capsules + Albums). All times UTC in JSON.
+servers:
+  - url: http://localhost:8080
+    description: Local docker-compose
+  - url: https://api.memoria.app
+    description: Production (placeholder)
+tags:
+  - name: health
+  - name: auth
+  - name: me
+  - name: media
+  - name: friends
+  - name: albums
+  - name: capsules
+  - name: social
+  - name: notifications
+  - name: billing
+  - name: stats
+  - name: exports
+  - name: widget
+  - name: webhooks
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+    TokenPair:
+      type: object
+      properties:
+        access_token: { type: string }
+        refresh_token: { type: string }
+        expires_in: { type: integer }
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        username: { type: string }
+        display_name: { type: string }
+        timezone: { type: string }
+        plan: { type: string, enum: [spark, plus, pro] }
+        avatar_media_id: { type: string, format: uuid, nullable: true }
+        avatar_url: { type: string, nullable: true }
+        member_since: { type: string, format: date-time }
+  parameters:
+    id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    userId:
+      name: userId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      summary: Liveness probe
+      responses:
+        '200':
+          description: OK
+  /readyz:
+    get:
+      tags: [health]
+      summary: Readiness probe (DB ping)
+      responses:
+        '200': { description: Ready }
+        '503': { description: Database unreachable }
+  /v1/auth/otp/request:
+    post:
+      tags: [auth]
+      summary: Request OTP email
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, purpose]
+              properties:
+                email: { type: string, format: email }
+                purpose: { type: string, enum: [signup, password_reset] }
+      responses:
+        '200': { description: Code sent }
+        '429': { description: Rate limited, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+  /v1/auth/otp/verify:
+    post:
+      tags: [auth]
+      summary: Verify OTP → ticket
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, purpose, code]
+              properties:
+                email: { type: string }
+                purpose: { type: string }
+                code: { type: string }
+      responses:
+        '200':
+          description: Ticket issued
+  /v1/auth/signup:
+    post:
+      tags: [auth]
+      summary: Create account with signup ticket
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ticket, password, username, display_name]
+              properties:
+                ticket: { type: string }
+                password: { type: string, minLength: 8, maxLength: 128 }
+                username: { type: string }
+                display_name: { type: string, maxLength: 100 }
+                timezone: { type: string }
+                device_name: { type: string }
+      responses:
+        '201': { description: User + tokens }
+  /v1/auth/username-available:
+    get:
+      tags: [auth]
+      summary: Check username availability
+      parameters:
+        - name: u
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: available boolean }
+  /v1/auth/login:
+    post:
+      tags: [auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string }
+                password: { type: string }
+                device_name: { type: string }
+      responses:
+        '200': { description: User + tokens }
+  /v1/auth/reset-password:
+    post:
+      tags: [auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ticket, new_password]
+              properties:
+                ticket: { type: string }
+                new_password: { type: string }
+      responses:
+        '200': { description: Password updated }
+  /v1/auth/refresh:
+    post:
+      tags: [auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token: { type: string }
+      responses:
+        '200':
+          description: Rotated tokens
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenPair' }
+  /v1/auth/logout:
+    post:
+      tags: [auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token: { type: string }
+      responses:
+        '200': { description: Logged out }
+  /v1/webhooks/revenuecat:
+    post:
+      tags: [webhooks]
+      summary: RevenueCat subscription webhook
+      security: []
+      parameters:
+        - name: Authorization
+          in: header
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Processed }
+        '401': { description: Invalid authorization }
+  /v1/me:
+    get:
+      tags: [me]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+    patch:
+      tags: [me]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                display_name: { type: string, maxLength: 100 }
+                timezone: { type: string }
+      responses:
+        '200': { description: Updated user }
+    delete:
+      tags: [me]
+      security: [{ bearerAuth: [] }]
+      summary: Soft-delete account
+      responses:
+        '200': { description: account_deleted }
+  /v1/me/avatar:
+    put:
+      tags: [me]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [media_id]
+              properties:
+                media_id: { type: string, format: uuid }
+      responses:
+        '200': { description: Updated user with avatar_url }
+  /v1/me/push-token:
+    put:
+      tags: [me]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, platform]
+              properties:
+                token: { type: string }
+                platform: { type: string, enum: [ios, android] }
+      responses:
+        '200': { description: registered }
+  /v1/me/subscription:
+    get:
+      tags: [billing]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: plan, limits, plan_expires_at }
+  /v1/me/stats/heatmap:
+    get:
+      tags: [stats]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Daily contribution counts }
+  /v1/me/stats/lifetime:
+    get:
+      tags: [stats]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Lifetime totals }
+  /v1/me/notification-prefs:
+    get:
+      tags: [notifications]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: prefs array }
+    put:
+      tags: [notifications]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Updated prefs }
+  /v1/me/invite-link:
+    post:
+      tags: [friends]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: token }
+  /v1/media/presign:
+    post:
+      tags: [media]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind, content_type, byte_size]
+              properties:
+                kind: { type: string, enum: [photo, video, voice] }
+                content_type: { type: string }
+                byte_size: { type: integer }
+                duration_ms: { type: integer }
+      responses:
+        '200': { description: media_id + upload_url (10 min TTL) }
+  /v1/media/{id}/confirm:
+    post:
+      tags: [media]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Ready media DTO }
+  /v1/media/{id}:
+    get:
+      tags: [media]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Media with signed url (10 min TTL) }
+  /v1/users/by-invite/{token}:
+    get:
+      tags: [friends]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Profile card }
+        '404': { description: Not found }
+  /v1/users/{username}:
+    get:
+      tags: [friends]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: username
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Profile + connection status }
+  /v1/friends/requests:
+    get:
+      tags: [friends]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: incoming + outgoing }
+    post:
+      tags: [friends]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id]
+              properties:
+                user_id: { type: string, format: uuid }
+      responses:
+        '201': { description: Request sent }
+  /v1/friends/requests/{userId}/accept:
+    post:
+      tags: [friends]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/userId'
+      responses:
+        '200': { description: Accepted }
+  /v1/friends/requests/{userId}/decline:
+    post:
+      tags: [friends]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/userId'
+      responses:
+        '200': { description: Declined }
+  /v1/friends/requests/{userId}:
+    delete:
+      tags: [friends]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/userId'
+      responses:
+        '204': { description: Cancelled }
+  /v1/friends:
+    get:
+      tags: [friends]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: friends list }
+  /v1/friends/{userId}:
+    delete:
+      tags: [friends]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/userId'
+      responses:
+        '204': { description: Unfriended }
+  /v1/blocks/{userId}:
+    post:
+      tags: [friends]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/userId'
+      responses:
+        '200': { description: Blocked }
+    delete:
+      tags: [friends]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/userId'
+      responses:
+        '204': { description: Unblocked }
+  /v1/albums:
+    get:
+      tags: [albums]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: state
+          in: query
+          schema: { type: string, enum: [pending, active, archived] }
+      responses:
+        '200': { description: Album list }
+    post:
+      tags: [albums]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, cover_style]
+              properties:
+                name: { type: string, maxLength: 100 }
+                cover_style: { type: string }
+                invited_user_id: { type: string, format: uuid }
+      responses:
+        '201': { description: Album created }
+  /v1/albums/{id}:
+    get:
+      tags: [albums]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200': { description: Album detail }
+  /v1/albums/{id}/accept:
+    post:
+      tags: [albums]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200': { description: Accepted }
+  /v1/albums/{id}/decline:
+    post:
+      tags: [albums]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200': { description: Declined }
+  /v1/albums/{id}/memories:
+    get:
+      tags: [albums]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/id'
+        - name: cursor
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, maximum: 50 }
+      responses:
+        '200': { description: Memory feed }
+    post:
+      tags: [albums]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/id'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [media_id]
+              properties:
+                media_id: { type: string, format: uuid }
+                caption: { type: string, maxLength: 500 }
+      responses:
+        '201': { description: Memory added }
+  /v1/albums/{id}/leave:
+    post:
+      tags: [albums]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200': { description: Left album }
+  /v1/timeline:
+    get:
+      tags: [albums]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: month
+          in: query
+          required: true
+          schema: { type: string, example: '2026-06' }
+      responses:
+        '200': { description: Month timeline buckets }
+  /v1/capsules:
+    get:
+      tags: [capsules]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: filter
+          in: query
+          required: true
+          schema: { type: string, enum: [ongoing, frozen, completed] }
+      responses:
+        '200': { description: Capsule list }
+    post:
+      tags: [capsules]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, type, unlock_at]
+              properties:
+                name: { type: string, maxLength: 100 }
+                type: { type: string, enum: [solo, group] }
+                unlock_at: { type: string, format: date-time }
+                description: { type: string, maxLength: 200 }
+                invited_user_ids: { type: array, items: { type: string, format: uuid } }
+      responses:
+        '201': { description: Capsule created }
+  /v1/capsules/{id}:
+    get:
+      tags: [capsules]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200': { description: Capsule detail (sealing applied) }
+    delete:
+      tags: [capsules]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200': { description: Deleted }
+  /v1/capsules/{id}/accept:
+    post:
+      tags: [capsules]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200': { description: Accepted }
+  /v1/capsules/{id}/decline:
+    post:
+      tags: [capsules]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200': { description: Declined }
+  /v1/capsules/{id}/members:
+    post:
+      tags: [capsules]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/id'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id]
+              properties:
+                user_id: { type: string, format: uuid }
+      responses:
+        '201': { description: Invited }
+  /v1/capsules/{id}/members/{userId}:
+    delete:
+      tags: [capsules]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/id'
+        - $ref: '#/components/parameters/userId'
+      responses:
+        '204': { description: Removed }
+  /v1/capsules/{id}/memories:
+    get:
+      tags: [capsules]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/id'
+        - name: cursor
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer }
+      responses:
+        '200': { description: Memories (sealed until unlock) }
+    post:
+      tags: [capsules]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/id'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [media_id]
+              properties:
+                media_id: { type: string, format: uuid }
+                caption: { type: string, maxLength: 500 }
+      responses:
+        '201': { description: Memory contributed }
+  /v1/capsules/{id}/unfreeze-vote:
+    post:
+      tags: [capsules]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200': { description: Vote recorded }
+  /v1/capsules/{id}/unblock/{userId}:
+    post:
+      tags: [capsules]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/id'
+        - $ref: '#/components/parameters/userId'
+      responses:
+        '200': { description: Unblocked }
+  /v1/capsules/{id}/stats:
+    get:
+      tags: [capsules]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200': { description: Unlock stats }
+  /v1/capsules/{id}/leave:
+    post:
+      tags: [capsules]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200': { description: Left }
+  /v1/memories/{id}/reactions:
+    put:
+      tags: [social]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/id'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [emoji]
+              properties:
+                emoji: { type: string, maxLength: 32 }
+      responses:
+        '200': { description: Reaction upserted }
+    delete:
+      tags: [social]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '204': { description: Reaction removed }
+  /v1/memories/{id}/comments:
+    get:
+      tags: [social]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/id'
+        - name: cursor
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer }
+      responses:
+        '200': { description: Comments page }
+    post:
+      tags: [social]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body: { type: string, maxLength: 1000 }
+      responses:
+        '201': { description: Comment created }
+  /v1/memories/{id}/comments/{commentId}:
+    delete:
+      tags: [social]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/id'
+        - name: commentId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { description: Comment deleted }
+  /v1/notifications/unread-count:
+    get:
+      tags: [notifications]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: count }
+  /v1/notifications:
+    get:
+      tags: [notifications]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: cursor
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, maximum: 50 }
+      responses:
+        '200': { description: Notification feed }
+  /v1/notifications/read-all:
+    post:
+      tags: [notifications]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: All marked read }
+  /v1/notifications/{id}/read:
+    post:
+      tags: [notifications]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200': { description: Marked read }
+  /v1/notifications/flush:
+    post:
+      tags: [notifications]
+      security: [{ bearerAuth: [] }]
+      summary: Flush due batches on app open
+      responses:
+        '200': { description: flushed }
+  /v1/exports:
+    post:
+      tags: [exports]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind]
+              properties:
+                kind: { type: string, enum: [zip, pdf] }
+      responses:
+        '202': { description: Job accepted }
+  /v1/exports/{id}:
+    get:
+      tags: [exports]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200': { description: Job status + download_url when ready }
+  /v1/widget/feed:
+    get:
+      tags: [widget]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Widget-eligible items }
