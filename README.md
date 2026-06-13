@@ -49,6 +49,10 @@ Ops runbooks: `../docs/RUNBOOK.md` (backups, load test, deploy). Security checkl
 `S3_ENDPOINT`; inside compose the API uses `http://minio:9000` while clients
 need `http://localhost:9000`).
 
+**Gmail SMTP:** use an [App Password](https://myaccount.google.com/apppasswords).
+`SMTP_FROM` must match the authenticated Gmail account unless you configure a
+Google Workspace **Send mail as** alias (e.g. `noreply@memoria.com`).
+
 ## Layout
 
 ```

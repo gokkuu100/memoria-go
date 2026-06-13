@@ -174,6 +174,19 @@ func (q *Queries) CountActiveCapsulesForUser(ctx context.Context, userID pgtype.
 	return count, err
 }
 
+const countCapsuleAcceptedMembers = `-- name: CountCapsuleAcceptedMembers :one
+SELECT COUNT(*)::bigint AS count
+FROM capsule_members
+WHERE capsule_id = $1 AND invite_status = 'accepted'
+`
+
+func (q *Queries) CountCapsuleAcceptedMembers(ctx context.Context, capsuleID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countCapsuleAcceptedMembers, capsuleID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countCapsuleMemories = `-- name: CountCapsuleMemories :one
 SELECT COUNT(*)::bigint AS count
 FROM memories
@@ -733,7 +746,20 @@ func (q *Queries) ListCapsuleMembers(ctx context.Context, capsuleID pgtype.UUID)
 const listCapsuleMemories = `-- name: ListCapsuleMemories :many
 SELECT m.id, m.container_type, m.container_id, m.author_id, m.media_id, m.voice_media_id, m.caption, m.created_at, m.deleted_at,
        (SELECT COUNT(*)::bigint FROM reactions r WHERE r.memory_id = m.id) AS reaction_count,
-       (SELECT COUNT(*)::bigint FROM comments c WHERE c.memory_id = m.id) AS comment_count
+       (SELECT COUNT(*)::bigint FROM comments c WHERE c.memory_id = m.id) AS comment_count,
+       COALESCE(
+         (
+           SELECT array_agg(emoji)
+           FROM (
+             SELECT r.emoji
+             FROM reactions r
+             WHERE r.memory_id = m.id
+             ORDER BY r.created_at DESC
+             LIMIT 4
+           ) recent
+         ),
+         ARRAY[]::text[]
+       ) AS reaction_emojis
 FROM memories m
 WHERE m.container_type = 'capsule'
   AND m.container_id = $1
@@ -754,17 +780,18 @@ type ListCapsuleMemoriesParams struct {
 }
 
 type ListCapsuleMemoriesRow struct {
-	ID            pgtype.UUID
-	ContainerType string
-	ContainerID   pgtype.UUID
-	AuthorID      pgtype.UUID
-	MediaID       pgtype.UUID
-	VoiceMediaID  pgtype.UUID
-	Caption       *string
-	CreatedAt     pgtype.Timestamptz
-	DeletedAt     pgtype.Timestamptz
-	ReactionCount int64
-	CommentCount  int64
+	ID             pgtype.UUID
+	ContainerType  string
+	ContainerID    pgtype.UUID
+	AuthorID       pgtype.UUID
+	MediaID        pgtype.UUID
+	VoiceMediaID   pgtype.UUID
+	Caption        *string
+	CreatedAt      pgtype.Timestamptz
+	DeletedAt      pgtype.Timestamptz
+	ReactionCount  int64
+	CommentCount   int64
+	ReactionEmojis interface{}
 }
 
 func (q *Queries) ListCapsuleMemories(ctx context.Context, arg ListCapsuleMemoriesParams) ([]ListCapsuleMemoriesRow, error) {
@@ -793,6 +820,7 @@ func (q *Queries) ListCapsuleMemories(ctx context.Context, arg ListCapsuleMemori
 			&i.DeletedAt,
 			&i.ReactionCount,
 			&i.CommentCount,
+			&i.ReactionEmojis,
 		); err != nil {
 			return nil, err
 		}
@@ -877,12 +905,17 @@ SELECT c.id, c.creator_id, c.name, c.description, c.type, c.state, c.unlock_at, 
 FROM capsules c
 JOIN capsule_members cm ON cm.capsule_id = c.id
 WHERE cm.user_id = $1
-  AND cm.invite_status = 'accepted'
   AND (
-    ($2 = 'ongoing' AND c.state IN ('pending', 'active'))
-    OR ($2 = 'frozen' AND c.state = 'frozen')
-    OR ($2 = 'completed' AND c.state = 'unlocked'
-        AND (c.viewable_until IS NULL OR c.viewable_until > now()))
+    ($2 = 'invites' AND cm.invite_status = 'pending' AND c.state = 'pending')
+    OR (
+      cm.invite_status = 'accepted'
+      AND (
+        ($2 = 'ongoing' AND c.state IN ('pending', 'active', 'frozen'))
+        OR ($2 = 'frozen' AND c.state = 'frozen')
+        OR ($2 = 'completed' AND c.state IN ('unlocked', 'archived')
+            AND (c.viewable_until IS NULL OR c.viewable_until > now()))
+      )
+    )
   )
 ORDER BY c.unlock_at ASC
 `

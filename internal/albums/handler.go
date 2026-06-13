@@ -39,6 +39,8 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Post("/albums/{id}/decline", h.decline)
 	r.Post("/albums/{id}/memories", h.addMemory)
 	r.Get("/albums/{id}/memories", h.listMemories)
+	r.Get("/albums/{id}/memories/{memoryId}/media", h.streamMemoryMedia)
+	r.Get("/albums/{id}/memories/{memoryId}/voice", h.streamMemoryVoice)
 	r.Post("/albums/{id}/leave", h.leave)
 	r.Get("/timeline", h.timeline)
 }
@@ -70,23 +72,27 @@ type albumDetailDTO struct {
 }
 
 type albumSummaryDTO struct {
-	ID          string     `json:"id"`
-	Name        string     `json:"name"`
-	CoverStyle  string     `json:"cover_style"`
-	State       string     `json:"state"`
-	ActivatedAt *time.Time `json:"activated_at,omitempty"`
-	MemoryCount int64      `json:"memory_count"`
+	ID                     string     `json:"id"`
+	Name                   string     `json:"name"`
+	CoverStyle             string     `json:"cover_style"`
+	State                  string     `json:"state"`
+	ActivatedAt            *time.Time `json:"activated_at,omitempty"`
+	MemoryCount            int64      `json:"memory_count"`
+	MemberCount            int64      `json:"member_count"`
+	LifespanSecondsRemaining *int64   `json:"lifespan_seconds_remaining,omitempty"`
 }
 
 type memoryDTO struct {
-	ID            string     `json:"id"`
-	Author        users.ProfileCard `json:"author"`
-	MediaURL      string     `json:"media_url"`
-	VoiceURL      *string    `json:"voice_url,omitempty"`
-	Caption       *string    `json:"caption,omitempty"`
-	CreatedAt     time.Time  `json:"created_at"`
-	ReactionCount int64      `json:"reaction_count"`
-	CommentCount  int64      `json:"comment_count"`
+	ID             string            `json:"id"`
+	Author         users.ProfileCard `json:"author"`
+	MediaURL       string            `json:"media_url"`
+	MediaKind      string            `json:"media_kind"`
+	VoiceURL       *string           `json:"voice_url,omitempty"`
+	Caption        *string           `json:"caption,omitempty"`
+	CreatedAt      time.Time         `json:"created_at"`
+	ReactionCount  int64             `json:"reaction_count"`
+	ReactionEmojis []string          `json:"reaction_emojis,omitempty"`
+	CommentCount   int64             `json:"comment_count"`
 }
 
 // POST /v1/albums
@@ -303,15 +309,21 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	userID, _ := httpx.UserID(r.Context())
 	state := r.URL.Query().Get("state")
-	if state != "active" && state != "archived" {
-		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "state must be active or archived")
+	if state != "active" && state != "archived" && state != "invites" {
+		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "state must be active, archived, or invites")
 		return
 	}
 
-	rows, err := h.Q.ListAlbumsForUser(r.Context(), dbgen.ListAlbumsForUserParams{
-		UserID: pg.UUID(userID),
-		State:  state,
-	})
+	var rows []dbgen.Album
+	var err error
+	if state == "invites" {
+		rows, err = h.Q.ListAlbumInvitesForUser(r.Context(), pg.UUID(userID))
+	} else {
+		rows, err = h.Q.ListAlbumsForUser(r.Context(), dbgen.ListAlbumsForUserParams{
+			UserID: pg.UUID(userID),
+			State:  state,
+		})
+	}
 	if err != nil {
 		httpx.InternalError(w, err)
 		return
@@ -324,18 +336,42 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 			httpx.InternalError(w, err)
 			return
 		}
+		memberCnt, err := h.Q.CountActiveMembers(r.Context(), a.ID)
+		if err != nil {
+			httpx.InternalError(w, err)
+			return
+		}
 		var activated *time.Time
 		if a.ActivatedAt.Valid {
 			t := pg.TimeValue(a.ActivatedAt)
 			activated = &t
 		}
+		var lifespanRemaining *int64
+		if a.State == "active" && a.ActivatedAt.Valid {
+			creator, err := h.Q.GetUserByID(r.Context(), a.CreatorID)
+			if err != nil {
+				httpx.InternalError(w, err)
+				return
+			}
+			plan := billing.ForUser(creator.Plan)
+			if !billing.IsUnlimited(plan.AlbumLifespanDays) {
+				end := pg.TimeValue(a.ActivatedAt).Add(time.Duration(plan.AlbumLifespanDays) * 24 * time.Hour)
+				sec := int64(time.Until(end).Seconds())
+				if sec < 0 {
+					sec = 0
+				}
+				lifespanRemaining = &sec
+			}
+		}
 		out = append(out, albumSummaryDTO{
-			ID:          pg.UUIDValue(a.ID).String(),
-			Name:        a.Name,
-			CoverStyle:  a.CoverStyle,
-			State:       a.State,
-			ActivatedAt: activated,
-			MemoryCount: count,
+			ID:                       pg.UUIDValue(a.ID).String(),
+			Name:                     a.Name,
+			CoverStyle:               a.CoverStyle,
+			State:                    a.State,
+			ActivatedAt:              activated,
+			MemoryCount:              count,
+			MemberCount:              memberCnt,
+			LifespanSecondsRemaining: lifespanRemaining,
 		})
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"albums": out})
@@ -921,10 +957,12 @@ func (h *Handler) memoryToDTO(ctx context.Context, row dbgen.ListAlbumMemoriesRo
 		ID:            pg.UUIDValue(row.ID).String(),
 		Author:        card,
 		MediaURL:      url,
+		MediaKind:     mediaRow.Kind,
 		VoiceURL:      voiceURL,
 		Caption:       row.Caption,
 		CreatedAt:     pg.TimeValue(row.CreatedAt),
 		ReactionCount: row.ReactionCount,
+		ReactionEmojis: pg.StringSliceFromPG(row.ReactionEmojis),
 		CommentCount:  row.CommentCount,
 	}, nil
 }

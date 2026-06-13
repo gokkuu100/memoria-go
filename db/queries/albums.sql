@@ -68,8 +68,21 @@ JOIN album_members am ON am.album_id = a.id
 WHERE am.user_id = $1
   AND am.invite_status = 'accepted'
   AND am.left_at IS NULL
-  AND a.state = $2
+  AND (
+    (sqlc.arg('state') = 'active' AND a.state IN ('active', 'pending'))
+    OR (sqlc.arg('state') = 'archived' AND a.state = 'archived')
+  )
 ORDER BY COALESCE(a.activated_at, a.created_at) DESC;
+
+-- name: ListAlbumInvitesForUser :many
+SELECT a.*
+FROM albums a
+JOIN album_members am ON am.album_id = a.id
+WHERE am.user_id = $1
+  AND am.invite_status = 'pending'
+  AND a.state = 'pending'
+  AND am.left_at IS NULL
+ORDER BY a.invite_expires_at ASC;
 
 -- name: MarkMemberLeft :one
 UPDATE album_members

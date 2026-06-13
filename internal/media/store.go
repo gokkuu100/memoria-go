@@ -22,15 +22,21 @@ import (
 // SignedURLTTL bounds how long any presigned PUT or GET stays valid.
 const SignedURLTTL = 10 * time.Minute
 
+// WidgetSignedURLTTL is longer — widget extensions cache feed JSON and may not refresh for hours.
+const WidgetSignedURLTTL = 24 * time.Hour
+
 // Store wraps two S3 clients over the same bucket: `internal` performs
 // server-side operations (HEAD/GET/DELETE/bucket create) over the in-network
 // endpoint, while presigned URLs handed to clients are signed against the
 // public endpoint (SigV4 covers the Host header, so the URL must be signed
 // for the host the client will actually hit).
 type Store struct {
-	internal *s3.Client
-	presign  *s3.PresignClient
-	bucket   string
+	internal       *s3.Client
+	presign          *s3.PresignClient
+	bucket           string
+	awsCfg           aws.Config
+	publicEndpoint   string
+	usePathStyle     bool
 }
 
 func NewStore(ctx context.Context, cfg *config.Config) (*Store, error) {
@@ -51,9 +57,12 @@ func NewStore(ctx context.Context, cfg *config.Config) (*Store, error) {
 	}
 
 	return &Store{
-		internal: clientFor(cfg.S3Endpoint),
-		presign:  s3.NewPresignClient(clientFor(cfg.S3PublicEndpoint)),
-		bucket:   cfg.S3Bucket,
+		internal:       clientFor(cfg.S3Endpoint),
+		presign:          s3.NewPresignClient(clientFor(cfg.S3PublicEndpoint)),
+		bucket:           cfg.S3Bucket,
+		awsCfg:           awsCfg,
+		publicEndpoint:   cfg.S3PublicEndpoint,
+		usePathStyle:     cfg.S3UsePathStyle,
 	}, nil
 }
 
@@ -75,10 +84,27 @@ func (s *Store) EnsureBucket(ctx context.Context) error {
 	return err
 }
 
-// PresignPut returns a presigned PUT URL. Content-Type is part of the
-// signature, so the uploader must send exactly the declared type.
+func (s *Store) presignClientFor(endpoint string) *s3.PresignClient {
+	if endpoint == "" || endpoint == s.publicEndpoint {
+		return s.presign
+	}
+	client := s3.NewFromConfig(s.awsCfg, func(o *s3.Options) {
+		o.BaseEndpoint = aws.String(endpoint)
+		o.UsePathStyle = s.usePathStyle
+	})
+	return s3.NewPresignClient(client)
+}
+
+// PresignPut returns a presigned PUT URL signed for the configured public endpoint.
 func (s *Store) PresignPut(ctx context.Context, key, contentType string) (string, error) {
-	req, err := s.presign.PresignPutObject(ctx, &s3.PutObjectInput{
+	return s.PresignPutForPublicEndpoint(ctx, s.publicEndpoint, key, contentType)
+}
+
+// PresignPutForPublicEndpoint signs a PUT URL for a specific public endpoint.
+func (s *Store) PresignPutForPublicEndpoint(ctx context.Context, publicEndpoint, key, contentType string) (string, error) {
+	presign := s.presignClientFor(publicEndpoint)
+
+	req, err := presign.PresignPutObject(ctx, &s3.PutObjectInput{
 		Bucket:      &s.bucket,
 		Key:         &key,
 		ContentType: &contentType,
@@ -92,7 +118,10 @@ func (s *Store) PresignPut(ctx context.Context, key, contentType string) (string
 // SignedURL returns a short-lived presigned GET URL for key — the only way
 // media is ever read by clients. The URL points at the public endpoint.
 func (s *Store) SignedURL(ctx context.Context, key string, ttl time.Duration) (string, error) {
-	req, err := s.presign.PresignGetObject(ctx, &s3.GetObjectInput{
+	endpoint := publicEndpointFromContext(ctx, s.publicEndpoint)
+	presign := s.presignClientFor(endpoint)
+
+	req, err := presign.PresignGetObject(ctx, &s3.GetObjectInput{
 		Bucket: &s.bucket,
 		Key:    &key,
 	}, s3.WithPresignExpires(ttl))

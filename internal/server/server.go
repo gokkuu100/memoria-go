@@ -78,7 +78,7 @@ func New(pool *pgxpool.Pool, cfg *config.Config, m mailer.Mailer, store *media.S
 			Limiter: limiter,
 		},
 		users: &users.Handler{Pool: pool, Q: q, Media: store},
-		media: &media.Handler{Q: q, Store: store},
+		media: &media.Handler{Q: q, Store: store, Env: cfg.Env},
 		friends: &friends.Handler{
 			Pool: pool, Q: q, Media: store, Notify: notify,
 		},
@@ -122,7 +122,7 @@ func (s *Server) Router() http.Handler {
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins: []string{"*"},
 		AllowedMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowedHeaders: []string{"Accept", "Authorization", "Content-Type"},
+		AllowedHeaders: []string{"Accept", "Authorization", "Content-Type", "X-Memoria-Media-Endpoint"},
 		MaxAge:         300,
 	}))
 
@@ -158,6 +158,7 @@ func (s *Server) Router() http.Handler {
 		v1.Group(func(p chi.Router) {
 			p.Use(auth.RequireAuth([]byte(s.cfg.JWTSecret)))
 			p.Use(RateLimitUser(s.limiter, s.cfg.Env))
+			p.Use(media.PublicEndpointMiddleware(s.cfg.Env))
 			s.users.Mount(p)
 			s.billing.MountAuthed(p)
 			s.media.Mount(p)

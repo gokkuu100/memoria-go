@@ -320,6 +320,47 @@ func (q *Queries) ListActiveAlbumsWithCreatorPlan(ctx context.Context) ([]ListAc
 	return items, nil
 }
 
+const listAlbumInvitesForUser = `-- name: ListAlbumInvitesForUser :many
+SELECT a.id, a.creator_id, a.name, a.cover_style, a.state, a.activated_at, a.archive_until, a.invite_expires_at, a.created_at
+FROM albums a
+JOIN album_members am ON am.album_id = a.id
+WHERE am.user_id = $1
+  AND am.invite_status = 'pending'
+  AND a.state = 'pending'
+  AND am.left_at IS NULL
+ORDER BY a.invite_expires_at ASC
+`
+
+func (q *Queries) ListAlbumInvitesForUser(ctx context.Context, userID pgtype.UUID) ([]Album, error) {
+	rows, err := q.db.Query(ctx, listAlbumInvitesForUser, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Album
+	for rows.Next() {
+		var i Album
+		if err := rows.Scan(
+			&i.ID,
+			&i.CreatorID,
+			&i.Name,
+			&i.CoverStyle,
+			&i.State,
+			&i.ActivatedAt,
+			&i.ArchiveUntil,
+			&i.InviteExpiresAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAlbumMembers = `-- name: ListAlbumMembers :many
 SELECT am.album_id, am.user_id, am.invite_status, am.accepted_at, am.left_at, u.username, u.display_name, u.avatar_media_id
 FROM album_members am
@@ -375,13 +416,16 @@ JOIN album_members am ON am.album_id = a.id
 WHERE am.user_id = $1
   AND am.invite_status = 'accepted'
   AND am.left_at IS NULL
-  AND a.state = $2
+  AND (
+    ($2 = 'active' AND a.state IN ('active', 'pending'))
+    OR ($2 = 'archived' AND a.state = 'archived')
+  )
 ORDER BY COALESCE(a.activated_at, a.created_at) DESC
 `
 
 type ListAlbumsForUserParams struct {
 	UserID pgtype.UUID
-	State  string
+	State  interface{}
 }
 
 func (q *Queries) ListAlbumsForUser(ctx context.Context, arg ListAlbumsForUserParams) ([]Album, error) {

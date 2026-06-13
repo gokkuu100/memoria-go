@@ -24,7 +24,20 @@ WHERE container_type = 'album'
 -- name: ListAlbumMemories :many
 SELECT m.*,
        (SELECT COUNT(*)::bigint FROM reactions r WHERE r.memory_id = m.id) AS reaction_count,
-       (SELECT COUNT(*)::bigint FROM comments c WHERE c.memory_id = m.id) AS comment_count
+       (SELECT COUNT(*)::bigint FROM comments c WHERE c.memory_id = m.id) AS comment_count,
+       COALESCE(
+         (
+           SELECT array_agg(emoji)
+           FROM (
+             SELECT r.emoji
+             FROM reactions r
+             WHERE r.memory_id = m.id
+             ORDER BY r.created_at DESC
+             LIMIT 4
+           ) recent
+         ),
+         ARRAY[]::text[]
+       ) AS reaction_emojis
 FROM memories m
 WHERE m.container_type = 'album'
   AND m.container_id = $1

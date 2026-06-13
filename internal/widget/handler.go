@@ -49,7 +49,7 @@ func (h *Handler) feed(w http.ResponseWriter, r *http.Request) {
 		if key == "" {
 			continue
 		}
-		url, err := h.Store.SignedURL(ctx, key, media.SignedURLTTL)
+		url, err := h.Store.SignedURL(ctx, key, media.WidgetSignedURLTTL)
 		if err != nil {
 			httpx.InternalError(w, err)
 			return
@@ -88,7 +88,7 @@ func (h *Handler) feed(w http.ResponseWriter, r *http.Request) {
 		if key == "" {
 			continue
 		}
-		url, err := h.Store.SignedURL(ctx, key, media.SignedURLTTL)
+		url, err := h.Store.SignedURL(ctx, key, media.WidgetSignedURLTTL)
 		if err != nil {
 			httpx.InternalError(w, err)
 			return

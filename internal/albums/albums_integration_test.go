@@ -284,6 +284,61 @@ func createAcceptAlbum(t *testing.T, e *env, tokenA, idB, tokenB string) string 
 	return created.ID
 }
 
+func TestPendingAlbumInActiveList(t *testing.T) {
+	e := getEnv(t)
+	tokenA, idA := signUp(t, e, uniq("plist_a")+"@example.com", uniq("plista_"), "PlA")
+	tokenB, idB := signUp(t, e, uniq("plist_b")+"@example.com", uniq("plistb_"), "PlB")
+	connectFriends(t, e, tokenA, idA, tokenB, idB)
+
+	var created struct {
+		ID    string `json:"id"`
+		State string `json:"state"`
+	}
+	if status := doJSON(t, "POST", e.ts.URL+"/v1/albums", tokenA, map[string]any{
+		"name": "Pending List", "cover_style": "gold", "invited_user_id": idB,
+	}, &created); status != http.StatusCreated || created.State != "pending" {
+		t.Fatalf("create: status %d state %q", status, created.State)
+	}
+
+	var activeList struct {
+		Albums []struct {
+			ID    string `json:"id"`
+			State string `json:"state"`
+		} `json:"albums"`
+	}
+	if status := doJSON(t, "GET", e.ts.URL+"/v1/albums?state=active", tokenA, nil, &activeList); status != http.StatusOK {
+		t.Fatalf("creator active list: status %d", status)
+	}
+	if len(activeList.Albums) != 1 || activeList.Albums[0].ID != created.ID || activeList.Albums[0].State != "pending" {
+		t.Fatalf("creator active list: %+v want pending album %q", activeList.Albums, created.ID)
+	}
+
+	var inviteList struct {
+		Albums []struct {
+			ID string `json:"id"`
+		} `json:"albums"`
+	}
+	if status := doJSON(t, "GET", e.ts.URL+"/v1/albums?state=invites", tokenB, nil, &inviteList); status != http.StatusOK || len(inviteList.Albums) != 1 {
+		t.Fatalf("invitee invites list: status %d count %d", status, len(inviteList.Albums))
+	}
+
+	var bActiveList struct {
+		Albums []struct {
+			ID string `json:"id"`
+		} `json:"albums"`
+	}
+	if status := doJSON(t, "GET", e.ts.URL+"/v1/albums?state=active", tokenB, nil, &bActiveList); status != http.StatusOK || len(bActiveList.Albums) != 0 {
+		t.Fatalf("invitee active list before accept: count %d want 0", len(bActiveList.Albums))
+	}
+
+	if status := doJSON(t, "POST", e.ts.URL+"/v1/albums/"+created.ID+"/decline", tokenB, nil, nil); status != http.StatusOK {
+		t.Fatalf("decline: status %d", status)
+	}
+	if status := doJSON(t, "GET", e.ts.URL+"/v1/albums?state=invites", tokenB, nil, &inviteList); status != http.StatusOK || len(inviteList.Albums) != 0 {
+		t.Fatalf("invitee invites after decline: count %d want 0", len(inviteList.Albums))
+	}
+}
+
 func TestFullAlbumLifecycle(t *testing.T) {
 	e := getEnv(t)
 	tokenA, idA := signUp(t, e, uniq("alb_a")+"@example.com", uniq("alice_"), "Alice")

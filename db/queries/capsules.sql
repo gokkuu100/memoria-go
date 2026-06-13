@@ -68,14 +68,24 @@ SELECT c.*
 FROM capsules c
 JOIN capsule_members cm ON cm.capsule_id = c.id
 WHERE cm.user_id = $1
-  AND cm.invite_status = 'accepted'
   AND (
-    (sqlc.arg('filter') = 'ongoing' AND c.state IN ('pending', 'active'))
-    OR (sqlc.arg('filter') = 'frozen' AND c.state = 'frozen')
-    OR (sqlc.arg('filter') = 'completed' AND c.state = 'unlocked'
-        AND (c.viewable_until IS NULL OR c.viewable_until > now()))
+    (sqlc.arg('filter') = 'invites' AND cm.invite_status = 'pending' AND c.state = 'pending')
+    OR (
+      cm.invite_status = 'accepted'
+      AND (
+        (sqlc.arg('filter') = 'ongoing' AND c.state IN ('pending', 'active', 'frozen'))
+        OR (sqlc.arg('filter') = 'frozen' AND c.state = 'frozen')
+        OR (sqlc.arg('filter') = 'completed' AND c.state IN ('unlocked', 'archived')
+            AND (c.viewable_until IS NULL OR c.viewable_until > now()))
+      )
+    )
   )
 ORDER BY c.unlock_at ASC;
+
+-- name: CountCapsuleAcceptedMembers :one
+SELECT COUNT(*)::bigint AS count
+FROM capsule_members
+WHERE capsule_id = $1 AND invite_status = 'accepted';
 
 -- name: ListPendingExpiredCapsules :many
 SELECT * FROM capsules
@@ -278,7 +288,20 @@ WHERE container_type = 'capsule'
 -- name: ListCapsuleMemories :many
 SELECT m.*,
        (SELECT COUNT(*)::bigint FROM reactions r WHERE r.memory_id = m.id) AS reaction_count,
-       (SELECT COUNT(*)::bigint FROM comments c WHERE c.memory_id = m.id) AS comment_count
+       (SELECT COUNT(*)::bigint FROM comments c WHERE c.memory_id = m.id) AS comment_count,
+       COALESCE(
+         (
+           SELECT array_agg(emoji)
+           FROM (
+             SELECT r.emoji
+             FROM reactions r
+             WHERE r.memory_id = m.id
+             ORDER BY r.created_at DESC
+             LIMIT 4
+           ) recent
+         ),
+         ARRAY[]::text[]
+       ) AS reaction_emojis
 FROM memories m
 WHERE m.container_type = 'capsule'
   AND m.container_id = $1

@@ -196,7 +196,20 @@ func (q *Queries) HardDeleteMemory(ctx context.Context, id pgtype.UUID) error {
 const listAlbumMemories = `-- name: ListAlbumMemories :many
 SELECT m.id, m.container_type, m.container_id, m.author_id, m.media_id, m.voice_media_id, m.caption, m.created_at, m.deleted_at,
        (SELECT COUNT(*)::bigint FROM reactions r WHERE r.memory_id = m.id) AS reaction_count,
-       (SELECT COUNT(*)::bigint FROM comments c WHERE c.memory_id = m.id) AS comment_count
+       (SELECT COUNT(*)::bigint FROM comments c WHERE c.memory_id = m.id) AS comment_count,
+       COALESCE(
+         (
+           SELECT array_agg(emoji)
+           FROM (
+             SELECT r.emoji
+             FROM reactions r
+             WHERE r.memory_id = m.id
+             ORDER BY r.created_at DESC
+             LIMIT 4
+           ) recent
+         ),
+         ARRAY[]::text[]
+       ) AS reaction_emojis
 FROM memories m
 WHERE m.container_type = 'album'
   AND m.container_id = $1
@@ -217,17 +230,18 @@ type ListAlbumMemoriesParams struct {
 }
 
 type ListAlbumMemoriesRow struct {
-	ID            pgtype.UUID
-	ContainerType string
-	ContainerID   pgtype.UUID
-	AuthorID      pgtype.UUID
-	MediaID       pgtype.UUID
-	VoiceMediaID  pgtype.UUID
-	Caption       *string
-	CreatedAt     pgtype.Timestamptz
-	DeletedAt     pgtype.Timestamptz
-	ReactionCount int64
-	CommentCount  int64
+	ID             pgtype.UUID
+	ContainerType  string
+	ContainerID    pgtype.UUID
+	AuthorID       pgtype.UUID
+	MediaID        pgtype.UUID
+	VoiceMediaID   pgtype.UUID
+	Caption        *string
+	CreatedAt      pgtype.Timestamptz
+	DeletedAt      pgtype.Timestamptz
+	ReactionCount  int64
+	CommentCount   int64
+	ReactionEmojis interface{}
 }
 
 func (q *Queries) ListAlbumMemories(ctx context.Context, arg ListAlbumMemoriesParams) ([]ListAlbumMemoriesRow, error) {
@@ -256,6 +270,7 @@ func (q *Queries) ListAlbumMemories(ctx context.Context, arg ListAlbumMemoriesPa
 			&i.DeletedAt,
 			&i.ReactionCount,
 			&i.CommentCount,
+			&i.ReactionEmojis,
 		); err != nil {
 			return nil, err
 		}

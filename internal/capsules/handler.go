@@ -41,6 +41,8 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Delete("/capsules/{id}/members/{userId}", h.removeMember)
 	r.Post("/capsules/{id}/memories", h.addMemory)
 	r.Get("/capsules/{id}/memories", h.listMemories)
+	r.Get("/capsules/{id}/memories/{memoryId}/media", h.streamMemoryMedia)
+	r.Get("/capsules/{id}/memories/{memoryId}/voice", h.streamMemoryVoice)
 	r.Post("/capsules/{id}/unfreeze-vote", h.unfreezeVote)
 	r.Post("/capsules/{id}/unblock/{userId}", h.unblockMember)
 	r.Get("/capsules/{id}/stats", h.stats)
@@ -83,22 +85,31 @@ type capsuleDetailDTO struct {
 }
 
 type capsuleSummaryDTO struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Type        string    `json:"type"`
-	State       string    `json:"state"`
-	UnlockAt    time.Time `json:"unlock_at"`
-	MemoryCount int64     `json:"memory_count"`
+	ID                     string     `json:"id"`
+	Name                   string     `json:"name"`
+	Description            *string    `json:"description,omitempty"`
+	Type                   string     `json:"type"`
+	State                  string     `json:"state"`
+	UnlockAt               time.Time  `json:"unlock_at"`
+	MemoryCount            int64      `json:"memory_count"`
+	MemberCount            int64      `json:"member_count"`
+	StreakCurrent          int32      `json:"streak_current"`
+	StreakPerfect          bool       `json:"streak_perfect"`
+	UnlockSecondsRemaining *int64     `json:"unlock_seconds_remaining,omitempty"`
+	FrozenAt               *time.Time `json:"frozen_at,omitempty"`
+	UnlockedAt             *time.Time `json:"unlocked_at,omitempty"`
 }
 
 type memoryDTO struct {
 	ID            string            `json:"id"`
 	Author        users.ProfileCard `json:"author"`
 	MediaURL      string            `json:"media_url"`
+	MediaKind     string            `json:"media_kind"`
 	VoiceURL      *string           `json:"voice_url,omitempty"`
 	Caption       *string           `json:"caption,omitempty"`
 	CreatedAt     time.Time         `json:"created_at"`
 	ReactionCount int64             `json:"reaction_count"`
+	ReactionEmojis []string         `json:"reaction_emojis,omitempty"`
 	CommentCount  int64             `json:"comment_count"`
 }
 
@@ -518,8 +529,8 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	userID, _ := httpx.UserID(r.Context())
 	filter := r.URL.Query().Get("filter")
-	if filter != "ongoing" && filter != "frozen" && filter != "completed" {
-		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "filter must be ongoing, frozen, or completed")
+	if filter != "ongoing" && filter != "frozen" && filter != "completed" && filter != "invites" {
+		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "filter must be ongoing, frozen, completed, or invites")
 		return
 	}
 	rows, err := h.Q.ListCapsulesForUser(r.Context(), dbgen.ListCapsulesForUserParams{
@@ -529,6 +540,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		httpx.InternalError(w, err)
 		return
 	}
+	now := time.Now().UTC()
 	out := make([]capsuleSummaryDTO, 0, len(rows))
 	for _, c := range rows {
 		cnt, err := h.Q.CountCapsuleMemories(r.Context(), c.ID)
@@ -536,13 +548,45 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 			httpx.InternalError(w, err)
 			return
 		}
+		memberCnt, err := h.Q.CountCapsuleAcceptedMembers(r.Context(), c.ID)
+		if err != nil {
+			httpx.InternalError(w, err)
+			return
+		}
+		var unlockRemaining *int64
+		if c.State != StateUnlocked && c.State != StateArchived && c.State != StateDisintegrated {
+			if unlockAt := pg.TimeValue(c.UnlockAt); unlockAt.After(now) {
+				sec := int64(unlockAt.Sub(now).Seconds())
+				unlockRemaining = &sec
+			}
+		}
+		var desc *string
+		if c.Description != nil && *c.Description != "" {
+			desc = c.Description
+		}
+		var frozenAt, unlockedAt *time.Time
+		if c.FrozenAt.Valid {
+			t := pg.TimeValue(c.FrozenAt)
+			frozenAt = &t
+		}
+		if c.UnlockedAt.Valid {
+			t := pg.TimeValue(c.UnlockedAt)
+			unlockedAt = &t
+		}
 		out = append(out, capsuleSummaryDTO{
-			ID:          pg.UUIDValue(c.ID).String(),
-			Name:        c.Name,
-			Type:        c.Type,
-			State:       c.State,
-			UnlockAt:    pg.TimeValue(c.UnlockAt),
-			MemoryCount: cnt,
+			ID:                     pg.UUIDValue(c.ID).String(),
+			Name:                   c.Name,
+			Description:            desc,
+			Type:                   c.Type,
+			State:                  c.State,
+			UnlockAt:               pg.TimeValue(c.UnlockAt),
+			MemoryCount:            cnt,
+			MemberCount:            memberCnt,
+			StreakCurrent:          c.StreakCurrent,
+			StreakPerfect:          c.StreakPerfect,
+			UnlockSecondsRemaining: unlockRemaining,
+			FrozenAt:               frozenAt,
+			UnlockedAt:             unlockedAt,
 		})
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"capsules": out})
@@ -1127,9 +1171,10 @@ func (h *Handler) memoryToDTO(ctx context.Context, row dbgen.ListCapsuleMemories
 	card := users.ToProfileCard(author)
 	card.AvatarURL = h.signAvatar(ctx, author)
 	return memoryDTO{
-		ID: pg.UUIDValue(row.ID).String(), Author: card, MediaURL: url,
+		ID: pg.UUIDValue(row.ID).String(), Author: card, MediaURL: url, MediaKind: mediaRow.Kind,
 		VoiceURL: voiceURL, Caption: row.Caption, CreatedAt: pg.TimeValue(row.CreatedAt),
-		ReactionCount: row.ReactionCount, CommentCount: row.CommentCount,
+		ReactionCount: row.ReactionCount, ReactionEmojis: pg.StringSliceFromPG(row.ReactionEmojis),
+		CommentCount: row.CommentCount,
 	}, nil
 }
 

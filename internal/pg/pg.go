@@ -42,3 +42,24 @@ func Date(t time.Time) pgtype.Date {
 func DateValue(d pgtype.Date) time.Time {
 	return d.Time
 }
+
+// StringSliceFromPG parses PostgreSQL text[] values scanned as interface{}.
+func StringSliceFromPG(v any) []string {
+	if v == nil {
+		return nil
+	}
+	switch xs := v.(type) {
+	case []string:
+		return xs
+	case []any:
+		out := make([]string, 0, len(xs))
+		for _, x := range xs {
+			if s, ok := x.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}

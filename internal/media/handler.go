@@ -16,6 +16,7 @@ import (
 	_ "golang.org/x/image/webp"
 
 	"memoria-backend/internal/billing"
+	"memoria-backend/internal/config"
 	"memoria-backend/internal/dbgen"
 	"memoria-backend/internal/httpx"
 	"memoria-backend/internal/pg"
@@ -26,12 +27,13 @@ import (
 var allowedTypes = map[string]map[string]bool{
 	"photo": {"image/jpeg": true, "image/png": true, "image/webp": true},
 	"video": {"video/mp4": true, "video/quicktime": true},
-	"voice": {"audio/m4a": true, "audio/mp4": true, "audio/aac": true},
+	"voice": {"audio/m4a": true, "audio/mp4": true, "audio/aac": true, "audio/x-caf": true, "audio/3gpp": true, "audio/webm": true},
 }
 
 type Handler struct {
 	Q     *dbgen.Queries
 	Store *Store
+	Env   config.Env
 }
 
 func (h *Handler) Mount(r chi.Router) {
@@ -92,10 +94,11 @@ func durationCapMs(p billing.Plan, kind string) int32 {
 func (h *Handler) presign(w http.ResponseWriter, r *http.Request) {
 	userID, _ := httpx.UserID(r.Context())
 	var req struct {
-		Kind        string `json:"kind"`
-		ContentType string `json:"content_type"`
-		ByteSize    int64  `json:"byte_size"`
-		DurationMs  *int32 `json:"duration_ms"`
+		Kind           string  `json:"kind"`
+		ContentType    string  `json:"content_type"`
+		ByteSize       int64   `json:"byte_size"`
+		DurationMs     *int32  `json:"duration_ms"`
+		UploadEndpoint *string `json:"upload_endpoint"`
 	}
 	if err := httpx.Decode(r, &req); err != nil {
 		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, err.Error())
@@ -162,7 +165,16 @@ func (h *Handler) presign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	uploadURL, err := h.Store.PresignPut(r.Context(), key, req.ContentType)
+	publicEndpoint := h.Store.publicEndpoint
+	if h.Env == config.EnvDevelopment {
+		if fromCtx := publicEndpointFromContext(r.Context(), ""); fromCtx != "" {
+			publicEndpoint = fromCtx
+		} else if req.UploadEndpoint != nil && *req.UploadEndpoint != "" && AllowedDevMediaEndpoint(*req.UploadEndpoint) {
+			publicEndpoint = *req.UploadEndpoint
+		}
+	}
+
+	uploadURL, err := h.Store.PresignPutForPublicEndpoint(r.Context(), publicEndpoint, key, req.ContentType)
 	if err != nil {
 		httpx.InternalError(w, err)
 		return
