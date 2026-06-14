@@ -1,0 +1,9 @@
+memoriago.duckdns.org {
+	encode gzip
+	reverse_proxy 127.0.0.1:18080
+}
+
+memoriago.duckdns.org:9000 {
+	encode gzip
+	reverse_proxy 127.0.0.1:19000
+}
