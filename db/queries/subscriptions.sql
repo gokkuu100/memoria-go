@@ -6,3 +6,10 @@ RETURNING *;
 
 -- name: GetSubscriptionEventByRCID :one
 SELECT * FROM subscription_events WHERE revenuecat_event_id = $1;
+
+-- name: GetLatestSubscriptionEventByUserID :one
+SELECT *
+FROM subscription_events
+WHERE user_id = $1
+ORDER BY created_at DESC
+LIMIT 1;

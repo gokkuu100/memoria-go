@@ -12,6 +12,13 @@ import (
 	"memoria-backend/internal/pg"
 )
 
+func optionalString(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
+}
+
 // Handler serves widget-eligible feed payloads for home-screen extensions.
 type Handler struct {
 	Q     *dbgen.Queries
@@ -30,6 +37,8 @@ type feedItemDTO struct {
 	CapsuleName string  `json:"capsule_name,omitempty"`
 	MemoryID    string  `json:"memory_id,omitempty"`
 	ThumbURL    string  `json:"thumb_url,omitempty"`
+	Caption     string  `json:"caption,omitempty"`
+	Comment     string  `json:"comment,omitempty"`
 	UnlockAt    *string `json:"unlock_at,omitempty"`
 }
 
@@ -60,6 +69,8 @@ func (h *Handler) feed(w http.ResponseWriter, r *http.Request) {
 			AlbumName: row.AlbumName,
 			MemoryID:  pg.UUIDValue(row.MemoryID).String(),
 			ThumbURL:  url,
+			Caption:   optionalString(row.Caption),
+			Comment:   row.LatestComment,
 		})
 	}
 
@@ -78,7 +89,7 @@ func (h *Handler) feed(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	unlocked, err := h.Q.ListWidgetUnlockedTodayMemories(ctx, pg.UUID(userID))
+	unlocked, err := h.Q.ListWidgetUnlockedCapsuleMemories(ctx, pg.UUID(userID))
 	if err != nil {
 		httpx.InternalError(w, err)
 		return
@@ -99,6 +110,8 @@ func (h *Handler) feed(w http.ResponseWriter, r *http.Request) {
 			CapsuleName: row.CapsuleName,
 			MemoryID:    pg.UUIDValue(row.MemoryID).String(),
 			ThumbURL:    url,
+			Caption:     optionalString(row.Caption),
+			Comment:     row.LatestComment,
 		})
 	}
 

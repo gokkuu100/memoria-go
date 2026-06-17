@@ -3,6 +3,14 @@ SELECT DISTINCT ON (a.id)
        m.id AS memory_id,
        a.id AS album_id,
        a.name AS album_name,
+       m.caption,
+       (
+         SELECT c.body
+         FROM comments c
+         WHERE c.memory_id = m.id
+         ORDER BY c.created_at DESC
+         LIMIT 1
+       ) AS latest_comment,
        med.thumb_bucket_key,
        med.bucket_key AS media_key,
        med.kind AS media_kind
@@ -25,14 +33,23 @@ WHERE cm.invite_status = 'accepted'
   AND c.state IN ('pending', 'active', 'frozen')
 ORDER BY c.unlock_at;
 
--- name: ListWidgetUnlockedTodayMemories :many
-SELECT DISTINCT ON (c.id)
+-- name: ListWidgetUnlockedCapsuleMemories :many
+SELECT
        m.id AS memory_id,
        c.id AS capsule_id,
        c.name AS capsule_name,
+       m.caption,
+       (
+         SELECT cm.body
+         FROM comments cm
+         WHERE cm.memory_id = m.id
+         ORDER BY cm.created_at DESC
+         LIMIT 1
+       ) AS latest_comment,
        med.thumb_bucket_key,
        med.bucket_key AS media_key,
-       med.kind AS media_kind
+       med.kind AS media_kind,
+       m.created_at
 FROM users u
 JOIN capsule_members cm ON cm.user_id = u.id
 JOIN capsules c ON c.id = cm.capsule_id
@@ -41,11 +58,9 @@ JOIN media med ON med.id = m.media_id
 WHERE u.id = $1
   AND cm.invite_status = 'accepted'
   AND cm.view_blocked = false
-  AND c.state = 'unlocked'
+  AND c.state IN ('unlocked', 'archived')
   AND (c.viewable_until IS NULL OR c.viewable_until > now())
-  AND c.unlocked_at IS NOT NULL
-  AND c.unlocked_at >= ((now() AT TIME ZONE u.timezone)::date AT TIME ZONE u.timezone)
-  AND c.unlocked_at < (((now() AT TIME ZONE u.timezone)::date + 1) AT TIME ZONE u.timezone)
   AND m.deleted_at IS NULL
   AND med.status = 'ready'
-ORDER BY c.id, m.created_at DESC;
+ORDER BY m.created_at DESC
+LIMIT 200;

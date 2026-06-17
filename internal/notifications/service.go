@@ -409,10 +409,13 @@ func (s *OutboxService) flushOne(ctx context.Context, row dbgen.NotificationOutb
 	msgs := make([]pushMessage, 0, len(tokens))
 	for _, tok := range tokens {
 		msgs = append(msgs, pushMessage{
-			To:    tok.ExpoToken,
-			Title: row.Title,
-			Body:  row.Body,
-			Data:  data,
+			To:        tok.ExpoToken,
+			Title:     row.Title,
+			Body:      row.Body,
+			Sound:     "default",
+			ChannelID: "default",
+			Priority:  "high",
+			Data:      data,
 		})
 	}
 

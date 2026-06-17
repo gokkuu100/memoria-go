@@ -318,6 +318,42 @@ func (q *Queries) ListAlbumMemoryMediaKeys(ctx context.Context, containerID pgty
 	return items, nil
 }
 
+const listCapsuleMemoryMediaKeys = `-- name: ListCapsuleMemoryMediaKeys :many
+SELECT m.id, med.bucket_key AS media_key, vm.bucket_key AS voice_key
+FROM memories m
+JOIN media med ON med.id = m.media_id
+LEFT JOIN media vm ON vm.id = m.voice_media_id
+WHERE m.container_type = 'capsule'
+  AND m.container_id = $1
+  AND m.deleted_at IS NULL
+`
+
+type ListCapsuleMemoryMediaKeysRow struct {
+	ID       pgtype.UUID
+	MediaKey string
+	VoiceKey *string
+}
+
+func (q *Queries) ListCapsuleMemoryMediaKeys(ctx context.Context, containerID pgtype.UUID) ([]ListCapsuleMemoryMediaKeysRow, error) {
+	rows, err := q.db.Query(ctx, listCapsuleMemoryMediaKeys, containerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListCapsuleMemoryMediaKeysRow
+	for rows.Next() {
+		var i ListCapsuleMemoryMediaKeysRow
+		if err := rows.Scan(&i.ID, &i.MediaKey, &i.VoiceKey); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCommentAuthorsExcept = `-- name: ListCommentAuthorsExcept :many
 SELECT DISTINCT author_id FROM comments
 WHERE memory_id = $1 AND author_id <> $2

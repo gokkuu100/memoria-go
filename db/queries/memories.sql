@@ -74,6 +74,15 @@ WHERE m.container_type = 'album'
   AND m.container_id = $1
   AND m.deleted_at IS NULL;
 
+-- name: ListCapsuleMemoryMediaKeys :many
+SELECT m.id, med.bucket_key AS media_key, vm.bucket_key AS voice_key
+FROM memories m
+JOIN media med ON med.id = m.media_id
+LEFT JOIN media vm ON vm.id = m.voice_media_id
+WHERE m.container_type = 'capsule'
+  AND m.container_id = $1
+  AND m.deleted_at IS NULL;
+
 -- name: UpsertReaction :one
 INSERT INTO reactions (memory_id, user_id, emoji)
 VALUES ($1, $2, $3)

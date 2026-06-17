@@ -29,6 +29,7 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Put("/me/notification-prefs", h.putPrefs)
 	r.Get("/notifications/unread-count", h.unreadCount)
 	r.Get("/notifications", h.listNotifications)
+	r.Post("/notifications/test-push", h.sendTestPush)
 	r.Post("/notifications/read-all", h.markAllRead)
 	r.Post("/notifications/{id}/read", h.markRead)
 	r.Post("/notifications/flush", h.flushOnOpen)
@@ -194,6 +195,52 @@ func (h *Handler) markAllRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]string{"status": "read"})
+}
+
+// POST /v1/notifications/test-push — send a test push to your own devices.
+func (h *Handler) sendTestPush(w http.ResponseWriter, r *http.Request) {
+	userID, _ := httpx.UserID(r.Context())
+	var req struct {
+		Title string `json:"title"`
+		Body  string `json:"body"`
+	}
+	if err := httpx.Decode(r, &req); err != nil {
+		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, err.Error())
+		return
+	}
+	title := strings.TrimSpace(req.Title)
+	body := strings.TrimSpace(req.Body)
+	if title == "" {
+		title = "Memoria test notification"
+	}
+	if body == "" {
+		body = "Push is working: banner + sound should appear."
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"type": "test_push",
+		"ts":   time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		httpx.InternalError(w, err)
+		return
+	}
+
+	if _, err := h.Q.CreateOutbox(r.Context(), dbgen.CreateOutboxParams{
+		UserID:   pg.UUID(userID),
+		Category: CategorySystemAlerts,
+		Title:    title,
+		Body:     body,
+		Data:     payload,
+	}); err != nil {
+		httpx.InternalError(w, err)
+		return
+	}
+	if h.Flusher != nil {
+		// Flush immediately so user can validate phone banner/sound in real time.
+		h.Flusher.FlushOnAppOpen(r.Context(), userID)
+	}
+	httpx.JSON(w, http.StatusOK, map[string]string{"status": "sent"})
 }
 
 func toNotificationItem(row dbgen.NotificationOutbox) notificationItem {

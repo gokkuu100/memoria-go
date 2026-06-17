@@ -992,6 +992,11 @@ func (h *Handler) deleteCapsule(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusForbidden, httpx.CodeForbidden, "admin only")
 		return
 	}
+	// Purge all memory media from object storage before marking disintegrated.
+	if err := purgeCapsuleMemories(r.Context(), h.Q, h.Media, capID); err != nil {
+		httpx.InternalError(w, err)
+		return
+	}
 	if _, err := h.Q.MarkCapsuleDisintegrated(r.Context(), pg.UUID(capID)); err != nil {
 		httpx.InternalError(w, err)
 		return

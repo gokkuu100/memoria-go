@@ -39,6 +39,8 @@ type pushMessage struct {
 	To               string         `json:"to"`
 	Title            string         `json:"title,omitempty"`
 	Body             string         `json:"body,omitempty"`
+	Sound            string         `json:"sound,omitempty"`
+	ChannelID        string         `json:"channelId,omitempty"`
 	Data             map[string]any `json:"data,omitempty"`
 	ContentAvailable *bool          `json:"_contentAvailable,omitempty"`
 	Priority         string         `json:"priority,omitempty"`

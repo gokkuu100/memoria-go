@@ -35,6 +35,7 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Post("/albums", h.create)
 	r.Get("/albums", h.list)
 	r.Get("/albums/{id}", h.get)
+	r.Delete("/albums/{id}", h.deleteAlbum)
 	r.Post("/albums/{id}/accept", h.accept)
 	r.Post("/albums/{id}/decline", h.decline)
 	r.Post("/albums/{id}/memories", h.addMemory)
@@ -564,6 +565,37 @@ func (h *Handler) listMemories(w http.ResponseWriter, r *http.Request) {
 			pg.UUIDValue(last.ID).String())
 	}
 	httpx.JSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) deleteAlbum(w http.ResponseWriter, r *http.Request) {
+	userID, _ := httpx.UserID(r.Context())
+	albumID, ok := h.parseAlbumID(w, r)
+	if !ok {
+		return
+	}
+	album, member, ok := h.loadAlbumMember(w, r, albumID, userID)
+	if !ok {
+		return
+	}
+	if album.State == "deleted" {
+		httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound, "album not found")
+		return
+	}
+	if pg.UUIDValue(album.CreatorID) != userID {
+		httpx.Error(w, http.StatusForbidden, httpx.CodeForbidden, "only the creator can delete this album")
+		return
+	}
+	_ = member
+	// Purge all memories from object storage first.
+	if err := purgeAlbumMemories(r.Context(), h.Q, h.Media, albumID); err != nil {
+		httpx.InternalError(w, err)
+		return
+	}
+	if _, err := h.Q.MarkAlbumDeleted(r.Context(), pg.UUID(albumID)); err != nil {
+		httpx.InternalError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) leave(w http.ResponseWriter, r *http.Request) {

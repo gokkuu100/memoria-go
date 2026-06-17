@@ -12,6 +12,29 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const getLatestSubscriptionEventByUserID = `-- name: GetLatestSubscriptionEventByUserID :one
+SELECT id, user_id, revenuecat_event_id, event_type, plan, raw, created_at
+FROM subscription_events
+WHERE user_id = $1
+ORDER BY created_at DESC
+LIMIT 1
+`
+
+func (q *Queries) GetLatestSubscriptionEventByUserID(ctx context.Context, userID pgtype.UUID) (SubscriptionEvent, error) {
+	row := q.db.QueryRow(ctx, getLatestSubscriptionEventByUserID, userID)
+	var i SubscriptionEvent
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.RevenuecatEventID,
+		&i.EventType,
+		&i.Plan,
+		&i.Raw,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getSubscriptionEventByRCID = `-- name: GetSubscriptionEventByRCID :one
 SELECT id, user_id, revenuecat_event_id, event_type, plan, raw, created_at FROM subscription_events WHERE revenuecat_event_id = $1
 `

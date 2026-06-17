@@ -595,3 +595,24 @@ func TestMarkReadReducesUnreadCount(t *testing.T) {
 		t.Fatalf("unread after mark read = %d, want 0", unread.Count)
 	}
 }
+
+func TestSendTestPushEndpoint(t *testing.T) {
+	e := getEnv(t)
+	mock := resetMock(t, e)
+
+	user := signUp(t, e, uniq("testpush")+"@example.com", uniq("testpush_"))
+	expoToken := "ExponentPushToken[test-endpoint]"
+	registerPushToken(t, e, user.Tokens.AccessToken, expoToken)
+
+	var resp struct {
+		Status string `json:"status"`
+	}
+	status := doJSON(t, "POST", e.ts.URL+"/v1/notifications/test-push", user.Tokens.AccessToken,
+		map[string]string{"title": "Ping", "body": "Checking notification sound/banner"}, &resp)
+	if status != http.StatusOK || resp.Status != "sent" {
+		t.Fatalf("test-push: status %d resp %+v", status, resp)
+	}
+	if mock.pushCount() < 1 {
+		t.Fatalf("expo push calls = %d, want >= 1", mock.pushCount())
+	}
+}

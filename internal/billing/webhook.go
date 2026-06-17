@@ -42,9 +42,17 @@ func (h *Handler) MountWebhook(r chi.Router) {
 }
 
 type subscriptionResponse struct {
-	Plan          string    `json:"plan"`
-	PlanExpiresAt *string   `json:"plan_expires_at"`
-	Limits        LimitsDTO `json:"limits"`
+	Plan          string                 `json:"plan"`
+	PlanExpiresAt *string                `json:"plan_expires_at"`
+	Limits        LimitsDTO              `json:"limits"`
+	LastEvent     *subscriptionEventMeta `json:"last_event,omitempty"`
+}
+
+type subscriptionEventMeta struct {
+	ID        string `json:"id"`
+	Type      string `json:"type"`
+	Plan      string `json:"plan"`
+	CreatedAt string `json:"created_at"`
 }
 
 func (h *Handler) getSubscription(w http.ResponseWriter, r *http.Request) {
@@ -67,6 +75,18 @@ func (h *Handler) getSubscription(w http.ResponseWriter, r *http.Request) {
 	if user.PlanExpiresAt.Valid {
 		s := pg.TimeValue(user.PlanExpiresAt).UTC().Format(time.RFC3339)
 		resp.PlanExpiresAt = &s
+	}
+	last, err := h.Q.GetLatestSubscriptionEventByUserID(r.Context(), user.ID)
+	if err == nil {
+		resp.LastEvent = &subscriptionEventMeta{
+			ID:        last.RevenuecatEventID,
+			Type:      last.EventType,
+			Plan:      last.Plan,
+			CreatedAt: pg.TimeValue(last.CreatedAt).UTC().Format(time.RFC3339),
+		}
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		httpx.InternalError(w, err)
+		return
 	}
 	httpx.JSON(w, http.StatusOK, resp)
 }

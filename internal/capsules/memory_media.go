@@ -1,7 +1,9 @@
 package capsules
 
 import (
+	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -14,6 +16,28 @@ import (
 	"memoria-backend/internal/media"
 	"memoria-backend/internal/pg"
 )
+
+// purgeCapsuleMemories hard-deletes every memory in a capsule and its S3 objects.
+func purgeCapsuleMemories(ctx context.Context, q *dbgen.Queries, store *media.Store, capsuleID uuid.UUID) error {
+	rows, err := q.ListCapsuleMemoryMediaKeys(ctx, pg.UUID(capsuleID))
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if err := store.Delete(ctx, row.MediaKey); err != nil {
+			slog.Error("capsules: deleting memory media object", "memory", pg.UUIDValue(row.ID), "error", err)
+		}
+		if row.VoiceKey != nil && *row.VoiceKey != "" {
+			if err := store.Delete(ctx, *row.VoiceKey); err != nil {
+				slog.Error("capsules: deleting voice media object", "memory", pg.UUIDValue(row.ID), "error", err)
+			}
+		}
+		if err := q.HardDeleteMemory(ctx, row.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 func (h *Handler) streamMemoryMedia(w http.ResponseWriter, r *http.Request) {
 	mem, ok := h.loadViewableMemory(w, r)
