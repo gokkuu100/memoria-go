@@ -132,6 +132,16 @@ func (s *OutboxService) AlbumMemoryAdded(ctx context.Context, toUserID, fromUser
 		CategoryAlbumMemory, "New memory", " added a photo to ", "album_memory_added")
 }
 
+func (s *OutboxService) AlbumMemberLeft(ctx context.Context, toUserID, fromUserID, albumID uuid.UUID, albumName string) {
+	s.enqueueAlbumEvent(ctx, toUserID, fromUserID, albumID, albumName,
+		CategorySystemAlerts, "Member left", " left album ", "album_member_left")
+}
+
+func (s *OutboxService) AlbumDeleted(ctx context.Context, toUserID, fromUserID, albumID uuid.UUID, albumName string) {
+	s.enqueueAlbumEvent(ctx, toUserID, fromUserID, albumID, albumName,
+		CategorySystemAlerts, "Album deleted", " deleted album ", "album_deleted")
+}
+
 func (s *OutboxService) CapsuleMemoryAdded(ctx context.Context, toUserID, fromUserID, capsuleID uuid.UUID, capsuleName string) {
 	from, err := s.Q.GetUserByID(ctx, pg.UUID(fromUserID))
 	if err != nil {
@@ -259,6 +269,16 @@ func (s *OutboxService) CapsuleUnlocked(ctx context.Context, toUserID, capsuleID
 	if err := s.EnqueueAt(ctx, toUserID, CategoryCapsuleUnlock, title, body, data, nil, deliverAfter); err != nil {
 		slog.ErrorContext(ctx, "notifications: enqueue capsule unlocked", "error", err)
 	}
+}
+
+func (s *OutboxService) CapsuleMemberLeft(ctx context.Context, toUserID, fromUserID, capsuleID uuid.UUID, capsuleName string) {
+	s.enqueueCapsuleEvent(ctx, toUserID, fromUserID, capsuleID, capsuleName,
+		CategorySystemAlerts, "Member left", " left capsule ", "capsule_member_left")
+}
+
+func (s *OutboxService) CapsuleDeleted(ctx context.Context, toUserID, fromUserID, capsuleID uuid.UUID, capsuleName string) {
+	s.enqueueCapsuleEvent(ctx, toUserID, fromUserID, capsuleID, capsuleName,
+		CategorySystemAlerts, "Capsule deleted", " deleted capsule ", "capsule_deleted")
 }
 
 func (s *OutboxService) enqueueCapsuleEvent(ctx context.Context, toUserID, fromUserID, capsuleID uuid.UUID, capsuleName, category, titlePrefix, bodySuffix, eventType string) {
@@ -413,7 +433,7 @@ func (s *OutboxService) flushOne(ctx context.Context, row dbgen.NotificationOutb
 			Title:     row.Title,
 			Body:      row.Body,
 			Sound:     "default",
-			ChannelID: "default",
+			ChannelID: "memoria-default",
 			Priority:  "high",
 			Data:      data,
 		})

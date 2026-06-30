@@ -90,6 +90,7 @@ type capsuleSummaryDTO struct {
 	Description            *string    `json:"description,omitempty"`
 	Type                   string     `json:"type"`
 	State                  string     `json:"state"`
+	CreatorID              string     `json:"creator_id"`
 	UnlockAt               time.Time  `json:"unlock_at"`
 	MemoryCount            int64      `json:"memory_count"`
 	MemberCount            int64      `json:"member_count"`
@@ -579,6 +580,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 			Description:            desc,
 			Type:                   c.Type,
 			State:                  c.State,
+			CreatorID:              pg.UUIDValue(c.CreatorID).String(),
 			UnlockAt:               pg.TimeValue(c.UnlockAt),
 			MemoryCount:            cnt,
 			MemberCount:            memberCnt,
@@ -975,6 +977,16 @@ func (h *Handler) leave(w http.ResponseWriter, r *http.Request) {
 		httpx.InternalError(w, err)
 		return
 	}
+
+	if h.Notify != nil {
+		others, _ := h.Q.ListCapsuleMemberUserIDs(r.Context(), pg.UUID(capID))
+		for _, uid := range others {
+			if pg.UUIDValue(uid) != userID {
+				h.Notify.CapsuleMemberLeft(r.Context(), pg.UUIDValue(uid), userID, capID, cap.Name)
+			}
+		}
+	}
+
 	httpx.JSON(w, http.StatusOK, map[string]string{"status": "left"})
 }
 
@@ -984,7 +996,7 @@ func (h *Handler) deleteCapsule(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	_, member, ok := h.loadCapsuleMember(w, r, capID, userID)
+	cap, member, ok := h.loadCapsuleMember(w, r, capID, userID)
 	if !ok {
 		return
 	}
@@ -997,10 +1009,25 @@ func (h *Handler) deleteCapsule(w http.ResponseWriter, r *http.Request) {
 		httpx.InternalError(w, err)
 		return
 	}
+
+	var members []pgtype.UUID
+	if h.Notify != nil {
+		members, _ = h.Q.ListCapsuleMemberUserIDs(r.Context(), pg.UUID(capID))
+	}
+
 	if _, err := h.Q.MarkCapsuleDisintegrated(r.Context(), pg.UUID(capID)); err != nil {
 		httpx.InternalError(w, err)
 		return
 	}
+
+	if h.Notify != nil {
+		for _, uid := range members {
+			if pg.UUIDValue(uid) != userID {
+				h.Notify.CapsuleDeleted(r.Context(), pg.UUIDValue(uid), userID, capID, cap.Name)
+			}
+		}
+	}
+
 	w.WriteHeader(http.StatusNoContent)
 }
 

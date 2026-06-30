@@ -18,6 +18,8 @@ type Sender interface {
 	AlbumInviteReceived(ctx context.Context, toUserID, fromUserID, albumID uuid.UUID, albumName string)
 	AlbumInviteExpired(ctx context.Context, toUserID, albumID uuid.UUID, albumName string)
 	AlbumMemoryAdded(ctx context.Context, toUserID, fromUserID, albumID uuid.UUID, albumName string)
+	AlbumMemberLeft(ctx context.Context, toUserID, fromUserID, albumID uuid.UUID, albumName string)
+	AlbumDeleted(ctx context.Context, toUserID, fromUserID, albumID uuid.UUID, albumName string)
 	RefreshWidgetForUsers(ctx context.Context, userIDs []uuid.UUID)
 	CapsuleMemoryAdded(ctx context.Context, toUserID, fromUserID, capsuleID uuid.UUID, capsuleName string)
 	CommentOnMemory(ctx context.Context, toUserID, fromUserID, memoryID uuid.UUID)
@@ -30,6 +32,8 @@ type Sender interface {
 	CapsuleFrozen(ctx context.Context, toUserID, capsuleID uuid.UUID, capsuleName string)
 	CapsuleUnfreezeVote(ctx context.Context, toUserID, fromUserID, capsuleID uuid.UUID, capsuleName string)
 	CapsuleUnlocked(ctx context.Context, toUserID, capsuleID uuid.UUID, capsuleName string, deliverAfter time.Time)
+	CapsuleMemberLeft(ctx context.Context, toUserID, fromUserID, capsuleID uuid.UUID, capsuleName string)
+	CapsuleDeleted(ctx context.Context, toUserID, fromUserID, capsuleID uuid.UUID, capsuleName string)
 }
 
 // LogSender is the dev no-op: events are logged instead of enqueued.
@@ -57,6 +61,16 @@ func (LogSender) AlbumInviteExpired(ctx context.Context, toUserID, albumID uuid.
 
 func (LogSender) AlbumMemoryAdded(ctx context.Context, toUserID, fromUserID, albumID uuid.UUID, albumName string) {
 	slog.InfoContext(ctx, "notification: album_memory_added",
+		"to", toUserID, "from", fromUserID, "album", albumID, "name", albumName)
+}
+
+func (LogSender) AlbumMemberLeft(ctx context.Context, toUserID, fromUserID, albumID uuid.UUID, albumName string) {
+	slog.InfoContext(ctx, "notification: album_member_left",
+		"to", toUserID, "from", fromUserID, "album", albumID, "name", albumName)
+}
+
+func (LogSender) AlbumDeleted(ctx context.Context, toUserID, fromUserID, albumID uuid.UUID, albumName string) {
+	slog.InfoContext(ctx, "notification: album_deleted",
 		"to", toUserID, "from", fromUserID, "album", albumID, "name", albumName)
 }
 
@@ -117,4 +131,14 @@ func (LogSender) CapsuleUnfreezeVote(ctx context.Context, toUserID, fromUserID, 
 func (LogSender) CapsuleUnlocked(ctx context.Context, toUserID, capsuleID uuid.UUID, capsuleName string, deliverAfter time.Time) {
 	slog.InfoContext(ctx, "notification: capsule_unlocked",
 		"to", toUserID, "capsule", capsuleID, "name", capsuleName, "deliver_after", deliverAfter)
+}
+
+func (LogSender) CapsuleMemberLeft(ctx context.Context, toUserID, fromUserID, capsuleID uuid.UUID, capsuleName string) {
+	slog.InfoContext(ctx, "notification: capsule_member_left",
+		"to", toUserID, "from", fromUserID, "capsule", capsuleID, "name", capsuleName)
+}
+
+func (LogSender) CapsuleDeleted(ctx context.Context, toUserID, fromUserID, capsuleID uuid.UUID, capsuleName string) {
+	slog.InfoContext(ctx, "notification: capsule_deleted",
+		"to", toUserID, "from", fromUserID, "capsule", capsuleID, "name", capsuleName)
 }

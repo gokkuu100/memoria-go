@@ -133,6 +133,37 @@ func (s *Server) Router() http.Handler {
 		httpx.Error(w, http.StatusMethodNotAllowed, httpx.CodeBadRequest, "method not allowed")
 	})
 
+	r.Get("/.well-known/apple-app-site-association", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		httpx.JSON(w, http.StatusOK, map[string]any{
+			"applinks": map[string]any{
+				"apps": []string{},
+				"details": []map[string]any{
+					{
+						"appID": "WCY5X45K3C.com.pilar.memoria.app",
+						"paths": []string{"*"},
+					},
+				},
+			},
+		})
+	})
+
+	r.Get("/.well-known/assetlinks.json", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		httpx.JSON(w, http.StatusOK, []map[string]any{
+			{
+				"relation": []string{"delegate_permission/common.handle_all_urls"},
+				"target": map[string]any{
+					"namespace": "android_app",
+					"package_name": "com.pilar.memoria.app",
+					"sha256_cert_fingerprints": []string{
+						"D8:C8:89:3A:0D:FF:48:5B:3C:84:CD:2B:CB:22:EE:50:1C:0A:DD:FE:A0:85:45:60:AB:6F:57:B5:32:04:35:46",
+					},
+				},
+			},
+		})
+	})
+
 	// Liveness: process is up.
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		httpx.JSON(w, http.StatusOK, map[string]string{"status": "ok"})

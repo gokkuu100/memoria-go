@@ -77,6 +77,7 @@ type albumSummaryDTO struct {
 	Name                   string     `json:"name"`
 	CoverStyle             string     `json:"cover_style"`
 	State                  string     `json:"state"`
+	CreatorID              string     `json:"creator_id"`
 	ActivatedAt            *time.Time `json:"activated_at,omitempty"`
 	MemoryCount            int64      `json:"memory_count"`
 	MemberCount            int64      `json:"member_count"`
@@ -369,6 +370,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 			Name:                     a.Name,
 			CoverStyle:               a.CoverStyle,
 			State:                    a.State,
+			CreatorID:                pg.UUIDValue(a.CreatorID).String(),
 			ActivatedAt:              activated,
 			MemoryCount:              count,
 			MemberCount:              memberCnt,
@@ -591,10 +593,25 @@ func (h *Handler) deleteAlbum(w http.ResponseWriter, r *http.Request) {
 		httpx.InternalError(w, err)
 		return
 	}
+
+	var members []dbgen.ListAlbumMembersRow
+	if h.Notify != nil {
+		members, _ = h.Q.ListAlbumMembers(r.Context(), pg.UUID(albumID))
+	}
+
 	if _, err := h.Q.MarkAlbumDeleted(r.Context(), pg.UUID(albumID)); err != nil {
 		httpx.InternalError(w, err)
 		return
 	}
+
+	if h.Notify != nil {
+		for _, member := range members {
+			if pg.UUIDValue(member.UserID) != userID {
+				h.Notify.AlbumDeleted(r.Context(), pg.UUIDValue(member.UserID), userID, albumID, album.Name)
+			}
+		}
+	}
+
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -649,6 +666,13 @@ func (h *Handler) leave(w http.ResponseWriter, r *http.Request) {
 		if _, err := h.Q.MarkAlbumDeleted(r.Context(), pg.UUID(albumID)); err != nil {
 			httpx.InternalError(w, err)
 			return
+		}
+	} else if h.Notify != nil {
+		others, _ := h.Q.ListAlbumMembers(r.Context(), pg.UUID(albumID))
+		for _, member := range others {
+			if pg.UUIDValue(member.UserID) != userID {
+				h.Notify.AlbumMemberLeft(r.Context(), pg.UUIDValue(member.UserID), userID, albumID, album.Name)
+			}
 		}
 	}
 
