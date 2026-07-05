@@ -4,6 +4,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	"memoria-backend/internal/notifications"
 	"memoria-backend/internal/social"
 	"memoria-backend/internal/stats"
+	"memoria-backend/internal/sentryx"
 	"memoria-backend/internal/users"
 	"memoria-backend/internal/widget"
 )
@@ -190,6 +192,12 @@ func (s *Server) Router() http.Handler {
 			p.Use(auth.RequireAuth([]byte(s.cfg.JWTSecret)))
 			p.Use(RateLimitUser(s.limiter, s.cfg.Env))
 			p.Use(media.PublicEndpointMiddleware(s.cfg.Env))
+			if s.cfg.Env == config.EnvDevelopment {
+				p.Post("/debug/sentry-test", func(w http.ResponseWriter, r *http.Request) {
+					sentryx.Capture(errors.New("Memoria test error from /v1/debug/sentry-test"))
+					httpx.JSON(w, http.StatusOK, map[string]any{"status": "ok", "captured": true})
+				})
+			}
 			s.users.Mount(p)
 			s.billing.MountAuthed(p)
 			s.media.Mount(p)

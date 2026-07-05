@@ -443,10 +443,23 @@ func (h *Handler) inviteMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := h.Q.GetCapsuleMember(r.Context(), dbgen.GetCapsuleMemberParams{
+	memberRow, err := h.Q.GetCapsuleMember(r.Context(), dbgen.GetCapsuleMemberParams{
 		CapsuleID: pg.UUID(capID), UserID: pg.UUID(inviteeID),
-	}); err == nil {
-		httpx.Error(w, http.StatusConflict, "already_member", "user is already in this capsule")
+	})
+	if err == nil {
+		if memberRow.InviteStatus == "accepted" {
+			httpx.Error(w, http.StatusConflict, "already_member", "user is already in this capsule")
+			return
+		}
+		_, err := h.Pool.Exec(r.Context(), `UPDATE capsule_members SET invite_status = 'pending' WHERE capsule_id = $1 AND user_id = $2`, pg.UUID(capID), pg.UUID(inviteeID))
+		if err != nil {
+			httpx.InternalError(w, err)
+			return
+		}
+		if h.Notify != nil {
+			h.Notify.CapsuleInviteReceived(r.Context(), inviteeID, userID, capID, cap.Name)
+		}
+		httpx.JSON(w, http.StatusCreated, map[string]string{"status": "invited"})
 		return
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		httpx.InternalError(w, err)

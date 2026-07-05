@@ -4,13 +4,13 @@ SELECT DISTINCT ON (a.id)
        a.id AS album_id,
        a.name AS album_name,
        m.caption,
-       (
+       COALESCE((
          SELECT c.body
          FROM comments c
          WHERE c.memory_id = m.id
          ORDER BY c.created_at DESC
          LIMIT 1
-       ) AS latest_comment,
+       ), '')::text AS latest_comment,
        med.thumb_bucket_key,
        med.bucket_key AS media_key,
        med.kind AS media_kind
@@ -39,13 +39,13 @@ SELECT
        c.id AS capsule_id,
        c.name AS capsule_name,
        m.caption,
-       (
+       COALESCE((
          SELECT cm.body
          FROM comments cm
          WHERE cm.memory_id = m.id
          ORDER BY cm.created_at DESC
          LIMIT 1
-       ) AS latest_comment,
+       ), '')::text AS latest_comment,
        med.thumb_bucket_key,
        med.bucket_key AS media_key,
        med.kind AS media_kind,
