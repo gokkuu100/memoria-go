@@ -56,12 +56,13 @@ type Capsule struct {
 }
 
 type CapsuleMember struct {
-	CapsuleID    pgtype.UUID
-	UserID       pgtype.UUID
-	Role         string
-	InviteStatus string
-	AcceptedAt   pgtype.Timestamptz
-	ViewBlocked  bool
+	CapsuleID          pgtype.UUID
+	UserID             pgtype.UUID
+	Role               string
+	InviteStatus       string
+	AcceptedAt         pgtype.Timestamptz
+	ViewBlocked        bool
+	UnlockRevealSeenAt pgtype.Timestamptz
 }
 
 type CapsuleUnfreezeVote struct {

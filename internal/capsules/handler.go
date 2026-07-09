@@ -46,6 +46,7 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Post("/capsules/{id}/unfreeze-vote", h.unfreezeVote)
 	r.Post("/capsules/{id}/unblock/{userId}", h.unblockMember)
 	r.Get("/capsules/{id}/stats", h.stats)
+	r.Post("/capsules/{id}/unlock-reveal/seen", h.markUnlockRevealSeen)
 	r.Post("/capsules/{id}/leave", h.leave)
 	r.Delete("/capsules/{id}", h.deleteCapsule)
 }
@@ -59,6 +60,7 @@ type memberDTO struct {
 	InviteStatus       string     `json:"invite_status"`
 	AcceptedAt         *time.Time `json:"accepted_at,omitempty"`
 	ViewBlocked        bool       `json:"view_blocked"`
+	UnlockRevealSeen   bool       `json:"unlock_reveal_seen"`
 	MemoryCount        int64      `json:"memory_count"`
 	LastContributionAt *time.Time `json:"last_contribution_at,omitempty"`
 }
@@ -951,6 +953,49 @@ func (h *Handler) stats(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, resp)
 }
 
+// POST /v1/capsules/{id}/unlock-reveal/seen
+func (h *Handler) markUnlockRevealSeen(w http.ResponseWriter, r *http.Request) {
+	userID, _ := httpx.UserID(r.Context())
+	capID, ok := h.parseCapsuleID(w, r)
+	if !ok {
+		return
+	}
+	cap, member, ok := h.loadCapsuleMember(w, r, capID, userID)
+	if !ok {
+		return
+	}
+	if member.InviteStatus != "accepted" {
+		httpx.Error(w, http.StatusForbidden, httpx.CodeForbidden, "not an active member")
+		return
+	}
+	if member.ViewBlocked {
+		httpx.Error(w, http.StatusForbidden, httpx.CodeForbidden, "view blocked")
+		return
+	}
+	if cap.State != StateUnlocked && cap.State != StateArchived {
+		httpx.Error(w, http.StatusForbidden, httpx.CodeForbidden, "capsule not unlocked")
+		return
+	}
+
+	updated, err := h.Q.MarkCapsuleUnlockRevealSeen(r.Context(), dbgen.MarkCapsuleUnlockRevealSeenParams{
+		CapsuleID: pg.UUID(capID),
+		UserID:    pg.UUID(userID),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			httpx.Error(w, http.StatusForbidden, httpx.CodeForbidden, "not an active member")
+			return
+		}
+		httpx.InternalError(w, err)
+		return
+	}
+
+	httpx.JSON(w, http.StatusOK, map[string]any{
+		"status":             "ok",
+		"unlock_reveal_seen": updated.UnlockRevealSeenAt.Valid,
+	})
+}
+
 func (h *Handler) leave(w http.ResponseWriter, r *http.Request) {
 	userID, _ := httpx.UserID(r.Context())
 	capID, ok := h.parseCapsuleID(w, r)
@@ -1120,7 +1165,8 @@ func (h *Handler) buildCapsuleDetail(w http.ResponseWriter, r *http.Request, cap
 		memberDTOs = append(memberDTOs, memberDTO{
 			ID: pg.UUIDValue(m.UserID).String(), Username: m.Username, DisplayName: m.DisplayName,
 			AvatarURL: card.AvatarURL, Role: m.Role, InviteStatus: m.InviteStatus,
-			AcceptedAt: accepted, ViewBlocked: m.ViewBlocked, MemoryCount: cnt,
+			AcceptedAt: accepted, ViewBlocked: m.ViewBlocked,
+			UnlockRevealSeen: m.UnlockRevealSeenAt.Valid, MemoryCount: cnt,
 			LastContributionAt: lastContrib,
 		})
 	}

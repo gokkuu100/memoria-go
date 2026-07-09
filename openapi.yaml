@@ -707,6 +707,14 @@ paths:
         - $ref: '#/components/parameters/id'
       responses:
         '200': { description: Unlock stats }
+  /v1/capsules/{id}/unlock-reveal/seen:
+    post:
+      tags: [capsules]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200': { description: Marked unlock reveal as seen (idempotent) }
   /v1/capsules/{id}/leave:
     post:
       tags: [capsules]

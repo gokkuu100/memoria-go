@@ -15,7 +15,7 @@ const acceptCapsuleInvite = `-- name: AcceptCapsuleInvite :one
 UPDATE capsule_members
 SET invite_status = 'accepted', accepted_at = now()
 WHERE capsule_id = $1 AND user_id = $2 AND invite_status = 'pending'
-RETURNING capsule_id, user_id, role, invite_status, accepted_at, view_blocked
+RETURNING capsule_id, user_id, role, invite_status, accepted_at, view_blocked, unlock_reveal_seen_at
 `
 
 type AcceptCapsuleInviteParams struct {
@@ -33,6 +33,7 @@ func (q *Queries) AcceptCapsuleInvite(ctx context.Context, arg AcceptCapsuleInvi
 		&i.InviteStatus,
 		&i.AcceptedAt,
 		&i.ViewBlocked,
+		&i.UnlockRevealSeenAt,
 	)
 	return i, err
 }
@@ -301,7 +302,7 @@ const declineCapsuleInvite = `-- name: DeclineCapsuleInvite :one
 UPDATE capsule_members
 SET invite_status = 'declined'
 WHERE capsule_id = $1 AND user_id = $2 AND invite_status = 'pending'
-RETURNING capsule_id, user_id, role, invite_status, accepted_at, view_blocked
+RETURNING capsule_id, user_id, role, invite_status, accepted_at, view_blocked, unlock_reveal_seen_at
 `
 
 type DeclineCapsuleInviteParams struct {
@@ -319,6 +320,7 @@ func (q *Queries) DeclineCapsuleInvite(ctx context.Context, arg DeclineCapsuleIn
 		&i.InviteStatus,
 		&i.AcceptedAt,
 		&i.ViewBlocked,
+		&i.UnlockRevealSeenAt,
 	)
 	return i, err
 }
@@ -398,7 +400,7 @@ func (q *Queries) GetCapsuleByID(ctx context.Context, id pgtype.UUID) (Capsule, 
 }
 
 const getCapsuleMember = `-- name: GetCapsuleMember :one
-SELECT capsule_id, user_id, role, invite_status, accepted_at, view_blocked FROM capsule_members WHERE capsule_id = $1 AND user_id = $2
+SELECT capsule_id, user_id, role, invite_status, accepted_at, view_blocked, unlock_reveal_seen_at FROM capsule_members WHERE capsule_id = $1 AND user_id = $2
 `
 
 type GetCapsuleMemberParams struct {
@@ -416,6 +418,7 @@ func (q *Queries) GetCapsuleMember(ctx context.Context, arg GetCapsuleMemberPara
 		&i.InviteStatus,
 		&i.AcceptedAt,
 		&i.ViewBlocked,
+		&i.UnlockRevealSeenAt,
 	)
 	return i, err
 }
@@ -529,7 +532,7 @@ func (q *Queries) GetMostReactedCapsuleMemory(ctx context.Context, containerID p
 }
 
 const getNextCapsuleAdminCandidate = `-- name: GetNextCapsuleAdminCandidate :one
-SELECT cm.capsule_id, cm.user_id, cm.role, cm.invite_status, cm.accepted_at, cm.view_blocked
+SELECT cm.capsule_id, cm.user_id, cm.role, cm.invite_status, cm.accepted_at, cm.view_blocked, cm.unlock_reveal_seen_at
 FROM capsule_members cm
 WHERE cm.capsule_id = $1
   AND cm.user_id <> $2
@@ -553,6 +556,7 @@ func (q *Queries) GetNextCapsuleAdminCandidate(ctx context.Context, arg GetNextC
 		&i.InviteStatus,
 		&i.AcceptedAt,
 		&i.ViewBlocked,
+		&i.UnlockRevealSeenAt,
 	)
 	return i, err
 }
@@ -694,7 +698,7 @@ func (q *Queries) ListCapsuleMemberUserIDs(ctx context.Context, capsuleID pgtype
 }
 
 const listCapsuleMembers = `-- name: ListCapsuleMembers :many
-SELECT cm.capsule_id, cm.user_id, cm.role, cm.invite_status, cm.accepted_at, cm.view_blocked, u.username, u.display_name, u.avatar_media_id
+SELECT cm.capsule_id, cm.user_id, cm.role, cm.invite_status, cm.accepted_at, cm.view_blocked, cm.unlock_reveal_seen_at, u.username, u.display_name, u.avatar_media_id
 FROM capsule_members cm
 JOIN users u ON u.id = cm.user_id
 WHERE cm.capsule_id = $1 AND u.deleted_at IS NULL
@@ -702,15 +706,16 @@ ORDER BY cm.accepted_at NULLS LAST, cm.user_id
 `
 
 type ListCapsuleMembersRow struct {
-	CapsuleID     pgtype.UUID
-	UserID        pgtype.UUID
-	Role          string
-	InviteStatus  string
-	AcceptedAt    pgtype.Timestamptz
-	ViewBlocked   bool
-	Username      string
-	DisplayName   string
-	AvatarMediaID pgtype.UUID
+	CapsuleID          pgtype.UUID
+	UserID             pgtype.UUID
+	Role               string
+	InviteStatus       string
+	AcceptedAt         pgtype.Timestamptz
+	ViewBlocked        bool
+	UnlockRevealSeenAt pgtype.Timestamptz
+	Username           string
+	DisplayName        string
+	AvatarMediaID      pgtype.UUID
 }
 
 func (q *Queries) ListCapsuleMembers(ctx context.Context, capsuleID pgtype.UUID) ([]ListCapsuleMembersRow, error) {
@@ -729,6 +734,7 @@ func (q *Queries) ListCapsuleMembers(ctx context.Context, capsuleID pgtype.UUID)
 			&i.InviteStatus,
 			&i.AcceptedAt,
 			&i.ViewBlocked,
+			&i.UnlockRevealSeenAt,
 			&i.Username,
 			&i.DisplayName,
 			&i.AvatarMediaID,
@@ -1316,6 +1322,33 @@ func (q *Queries) MarkCapsuleDisintegrated(ctx context.Context, id pgtype.UUID) 
 	return i, err
 }
 
+const markCapsuleUnlockRevealSeen = `-- name: MarkCapsuleUnlockRevealSeen :one
+UPDATE capsule_members
+SET unlock_reveal_seen_at = COALESCE(unlock_reveal_seen_at, now())
+WHERE capsule_id = $1 AND user_id = $2 AND invite_status = 'accepted'
+RETURNING capsule_id, user_id, role, invite_status, accepted_at, view_blocked, unlock_reveal_seen_at
+`
+
+type MarkCapsuleUnlockRevealSeenParams struct {
+	CapsuleID pgtype.UUID
+	UserID    pgtype.UUID
+}
+
+func (q *Queries) MarkCapsuleUnlockRevealSeen(ctx context.Context, arg MarkCapsuleUnlockRevealSeenParams) (CapsuleMember, error) {
+	row := q.db.QueryRow(ctx, markCapsuleUnlockRevealSeen, arg.CapsuleID, arg.UserID)
+	var i CapsuleMember
+	err := row.Scan(
+		&i.CapsuleID,
+		&i.UserID,
+		&i.Role,
+		&i.InviteStatus,
+		&i.AcceptedAt,
+		&i.ViewBlocked,
+		&i.UnlockRevealSeenAt,
+	)
+	return i, err
+}
+
 const markFreezeWarningSent = `-- name: MarkFreezeWarningSent :exec
 UPDATE capsules SET freeze_warning_sent = true WHERE id = $1
 `
@@ -1442,7 +1475,7 @@ const unblockCapsuleMember = `-- name: UnblockCapsuleMember :one
 UPDATE capsule_members
 SET view_blocked = false
 WHERE capsule_id = $1 AND user_id = $2 AND view_blocked = true
-RETURNING capsule_id, user_id, role, invite_status, accepted_at, view_blocked
+RETURNING capsule_id, user_id, role, invite_status, accepted_at, view_blocked, unlock_reveal_seen_at
 `
 
 type UnblockCapsuleMemberParams struct {
@@ -1460,6 +1493,7 @@ func (q *Queries) UnblockCapsuleMember(ctx context.Context, arg UnblockCapsuleMe
 		&i.InviteStatus,
 		&i.AcceptedAt,
 		&i.ViewBlocked,
+		&i.UnlockRevealSeenAt,
 	)
 	return i, err
 }

@@ -14,6 +14,12 @@ VALUES ($1, $2, $3, $4, $5);
 -- name: GetCapsuleMember :one
 SELECT * FROM capsule_members WHERE capsule_id = $1 AND user_id = $2;
 
+-- name: MarkCapsuleUnlockRevealSeen :one
+UPDATE capsule_members
+SET unlock_reveal_seen_at = COALESCE(unlock_reveal_seen_at, now())
+WHERE capsule_id = $1 AND user_id = $2 AND invite_status = 'accepted'
+RETURNING *;
+
 -- name: AcceptCapsuleInvite :one
 UPDATE capsule_members
 SET invite_status = 'accepted', accepted_at = now()
