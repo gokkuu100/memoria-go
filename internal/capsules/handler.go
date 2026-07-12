@@ -278,6 +278,9 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	if inviteExpires.Valid {
 		resp["invite_expires_at"] = pg.TimeValue(inviteExpires)
 	}
+	if cap.State == StateActive {
+		ScheduleUnlockReminder(r.Context(), h.Q, h.Notify, cap)
+	}
 	httpx.JSON(w, http.StatusCreated, resp)
 }
 
@@ -326,6 +329,9 @@ func (h *Handler) accept(w http.ResponseWriter, r *http.Request) {
 			for _, uid := range members {
 				h.Notify.CapsuleActivated(r.Context(), pg.UUIDValue(uid), capID, cap.Name)
 			}
+		}
+		if updated, err := h.Q.GetCapsuleByID(r.Context(), pg.UUID(capID)); err == nil {
+			ScheduleUnlockReminder(r.Context(), h.Q, h.Notify, updated)
 		}
 	}
 
@@ -628,10 +634,19 @@ func (h *Handler) addMemory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	now := time.Now().UTC()
+	unlockAt := pg.TimeValue(cap.UnlockAt)
+	if !now.Before(unlockAt) {
+		httpx.Error(w, http.StatusForbidden, "queue_sync_deadline_passed",
+			"capsule unlock has passed; memories can no longer be added")
+		return
+	}
+
 	var req struct {
 		MediaID      string  `json:"media_id"`
 		VoiceMediaID *string `json:"voice_media_id"`
 		Caption      *string `json:"caption"`
+		CapturedAt   *string `json:"captured_at"`
 	}
 	if err := httpx.Decode(r, &req); err != nil {
 		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, err.Error())
@@ -641,6 +656,63 @@ func (h *Handler) addMemory(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "media_id must be a valid UUID")
 		return
+	}
+
+	capturedAt := now
+	if req.CapturedAt != nil && *req.CapturedAt != "" {
+		parsed, err := parseRFC3339(*req.CapturedAt)
+		if err != nil {
+			httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "captured_at must be RFC3339")
+			return
+		}
+		capturedAt = parsed.UTC()
+	}
+	if !capturedAt.Before(unlockAt) {
+		httpx.Error(w, http.StatusBadRequest, "queue_capture_outside_window",
+			"memory was captured after the capsule contribution window closed")
+		return
+	}
+	if capturedAt.After(now.Add(5 * time.Minute)) {
+		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "captured_at cannot be in the future")
+		return
+	}
+	if capturedAt.Before(pg.TimeValue(cap.CreatedAt)) {
+		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "captured_at cannot be before the capsule was created")
+		return
+	}
+	if member.AcceptedAt.Valid && capturedAt.Before(pg.TimeValue(member.AcceptedAt)) {
+		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "captured_at cannot be before you joined the capsule")
+		return
+	}
+
+	var idempotencyKey uuid.UUID
+	if rawKey := r.Header.Get("Idempotency-Key"); rawKey != "" {
+		idempotencyKey, err = uuid.Parse(rawKey)
+		if err != nil {
+			httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "Idempotency-Key must be a valid UUID")
+			return
+		}
+		existing, err := h.Q.GetMemoryIdempotency(r.Context(), dbgen.GetMemoryIdempotencyParams{
+			UserID:         pg.UUID(userID),
+			IdempotencyKey: pg.UUID(idempotencyKey),
+		})
+		if err == nil {
+			if pg.UUIDValue(existing.CapsuleID) != capID {
+				httpx.Error(w, http.StatusConflict, "idempotency_conflict", "Idempotency-Key was already used for a different capsule")
+				return
+			}
+			mem, err := h.Q.GetMemoryByID(r.Context(), existing.MemoryID)
+			if err != nil {
+				httpx.InternalError(w, err)
+				return
+			}
+			h.writeMemoryCreated(w, mem, http.StatusOK)
+			return
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			httpx.InternalError(w, err)
+			return
+		}
 	}
 
 	creator, err := h.Q.GetUserByID(r.Context(), cap.CreatorID)
@@ -687,20 +759,46 @@ func (h *Handler) addMemory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mem, err := h.Q.CreateMemory(r.Context(), dbgen.CreateMemoryParams{
+	tx, err := h.Pool.Begin(r.Context())
+	if err != nil {
+		httpx.InternalError(w, err)
+		return
+	}
+	defer func() { _ = tx.Rollback(r.Context()) }()
+	qtx := h.Q.WithTx(tx)
+
+	mem, err := qtx.CreateMemory(r.Context(), dbgen.CreateMemoryParams{
 		ContainerType: "capsule",
 		ContainerID:   pg.UUID(capID),
 		AuthorID:      pg.UUID(userID),
 		MediaID:       pg.UUID(mediaID),
 		VoiceMediaID:  voiceID,
 		Caption:       req.Caption,
+		CapturedAt:    pg.Time(capturedAt),
 	})
 	if err != nil {
 		httpx.InternalError(w, err)
 		return
 	}
 
-	if err := RecordContribution(r.Context(), h.Q, capID, time.Now().UTC()); err != nil {
+	if idempotencyKey != uuid.Nil {
+		if _, err := qtx.CreateMemoryIdempotency(r.Context(), dbgen.CreateMemoryIdempotencyParams{
+			UserID:         pg.UUID(userID),
+			IdempotencyKey: pg.UUID(idempotencyKey),
+			CapsuleID:      pg.UUID(capID),
+			MemoryID:       mem.ID,
+		}); err != nil {
+			httpx.InternalError(w, err)
+			return
+		}
+	}
+
+	if err := RecordContribution(r.Context(), qtx, capID, capturedAt); err != nil {
+		httpx.InternalError(w, err)
+		return
+	}
+
+	if err := tx.Commit(r.Context()); err != nil {
 		httpx.InternalError(w, err)
 		return
 	}
@@ -716,9 +814,23 @@ func (h *Handler) addMemory(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	httpx.JSON(w, http.StatusCreated, map[string]any{
-		"id":         pg.UUIDValue(mem.ID).String(),
-		"created_at": pg.TimeValue(mem.CreatedAt),
+	h.writeMemoryCreated(w, mem, http.StatusCreated)
+}
+
+func parseRFC3339(raw string) (time.Time, error) {
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
+		if t, err := time.Parse(layout, raw); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("invalid time")
+}
+
+func (h *Handler) writeMemoryCreated(w http.ResponseWriter, mem dbgen.Memory, status int) {
+	httpx.JSON(w, status, map[string]any{
+		"id":          pg.UUIDValue(mem.ID).String(),
+		"created_at":  pg.TimeValue(mem.CreatedAt),
+		"captured_at": pg.TimeValue(mem.CapturedAt),
 	})
 }
 
@@ -796,7 +908,7 @@ func (h *Handler) listMemories(w http.ResponseWriter, r *http.Request) {
 	if hasMore && len(rows) > 0 {
 		last := rows[len(rows)-1]
 		resp["next_cursor"] = fmt.Sprintf("%s|%s",
-			pg.TimeValue(last.CreatedAt).Format(time.RFC3339Nano),
+			pg.TimeValue(last.CapturedAt).Format(time.RFC3339Nano),
 			pg.UUIDValue(last.ID).String())
 	}
 	httpx.JSON(w, http.StatusOK, resp)
@@ -1263,7 +1375,7 @@ func (h *Handler) memoryToDTO(ctx context.Context, row dbgen.ListCapsuleMemories
 	card.AvatarURL = h.signAvatar(ctx, author)
 	return memoryDTO{
 		ID: pg.UUIDValue(row.ID).String(), Author: card, MediaURL: url, MediaKind: mediaRow.Kind,
-		VoiceURL: voiceURL, Caption: row.Caption, CreatedAt: pg.TimeValue(row.CreatedAt),
+		VoiceURL: voiceURL, Caption: row.Caption, CreatedAt: pg.TimeValue(row.CapturedAt),
 		ReactionCount: row.ReactionCount, ReactionEmojis: pg.StringSliceFromPG(row.ReactionEmojis),
 		CommentCount: row.CommentCount,
 	}, nil

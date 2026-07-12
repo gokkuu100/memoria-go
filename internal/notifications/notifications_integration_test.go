@@ -26,6 +26,7 @@ import (
 	"github.com/pressly/goose/v3"
 
 	"memoria-backend/db"
+	"memoria-backend/internal/auth"
 	"memoria-backend/internal/config"
 	"memoria-backend/internal/dbgen"
 	"memoria-backend/internal/media"
@@ -593,6 +594,52 @@ func TestMarkReadReducesUnreadCount(t *testing.T) {
 	doJSON(t, "GET", e.ts.URL+"/v1/notifications/unread-count", userA.Tokens.AccessToken, nil, &unread)
 	if unread.Count != 0 {
 		t.Fatalf("unread after mark read = %d, want 0", unread.Count)
+	}
+}
+
+func TestDeleteNotification(t *testing.T) {
+	e := getEnv(t)
+	resetMock(t, e)
+
+	// Seed users + mint tokens directly: the API signup path is capped by the
+	// per-IP OTP rate limit, which the suite already saturates.
+	ownerID := seedTestUser(t, e, uniq("delnotif_"))
+	otherID := seedTestUser(t, e, uniq("delnotifb_"))
+	ownerToken, err := auth.SignAccess([]byte("test-secret"), ownerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherToken, err := auth.SignAccess([]byte("test-secret"), otherID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := e.outbox.Enqueue(context.Background(), ownerID, notifications.CategorySystemAlerts,
+		"Delete me", "swipe to delete", map[string]any{"type": "test"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	e.outbox.FlushInstant(context.Background())
+
+	var list struct {
+		Notifications []map[string]any `json:"notifications"`
+	}
+	doJSON(t, "GET", e.ts.URL+"/v1/notifications", ownerToken, nil, &list)
+	if len(list.Notifications) != 1 {
+		t.Fatalf("notifications = %d, want 1", len(list.Notifications))
+	}
+	notifID := list.Notifications[0]["id"].(string)
+
+	if status := doJSON(t, "DELETE", e.ts.URL+"/v1/notifications/"+notifID, otherToken, nil, nil); status != http.StatusNotFound {
+		t.Fatalf("delete as other user: status %d, want 404", status)
+	}
+
+	if status := doJSON(t, "DELETE", e.ts.URL+"/v1/notifications/"+notifID, ownerToken, nil, nil); status != http.StatusNoContent {
+		t.Fatalf("delete: status %d, want 204", status)
+	}
+
+	doJSON(t, "GET", e.ts.URL+"/v1/notifications", ownerToken, nil, &list)
+	if len(list.Notifications) != 0 {
+		t.Fatalf("notifications after delete = %d, want 0", len(list.Notifications))
 	}
 }
 

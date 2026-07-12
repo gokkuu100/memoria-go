@@ -165,27 +165,28 @@ func (s *OutboxService) CapsuleMemoryAdded(ctx context.Context, toUserID, fromUs
 
 func (s *OutboxService) CommentOnMemory(ctx context.Context, toUserID, fromUserID, memoryID uuid.UUID) {
 	s.enqueueMemorySocialEvent(ctx, toUserID, fromUserID, memoryID,
-		CategoryReactionsComments, "New comment", " commented on a photo", "comment_on_memory")
+		CategoryReactionsComments, "New comment", " commented on your photo", "comment_on_memory")
 }
 
-func (s *OutboxService) ReactionOnMemory(ctx context.Context, toUserID, fromUserID, memoryID uuid.UUID) {
+func (s *OutboxService) ReactionOnMemory(ctx context.Context, toUserID, fromUserID, memoryID uuid.UUID, emoji string) {
 	from, err := s.Q.GetUserByID(ctx, pg.UUID(fromUserID))
 	if err != nil {
 		slog.ErrorContext(ctx, "notifications: loading sender profile", "error", err)
 		return
 	}
-	batchKey := reactionBatchKey(memoryID, toUserID)
-	deliverAfter := s.computeBatchDeliverAfter(ctx, batchKey)
-	title := "New reaction"
-	body := from.DisplayName + " reacted to your photo"
+	title := "New reaction " + emoji
+	body := from.DisplayName + " reacted " + emoji + " to your photo"
 	data := map[string]any{
 		"type":         "reaction_on_memory",
 		"memory_id":    memoryID.String(),
 		"from_user_id": fromUserID.String(),
+		"emoji":        emoji,
 	}
-	if err := s.EnqueueAt(ctx, toUserID, CategoryReactionsComments, title, body, data, &batchKey, deliverAfter); err != nil {
+	if err := s.Enqueue(ctx, toUserID, CategoryReactionsComments, title, body, data, nil); err != nil {
 		slog.ErrorContext(ctx, "notifications: enqueue reaction", "error", err)
+		return
 	}
+	s.triggerFlush()
 }
 
 func (s *OutboxService) CapsuleInviteReceived(ctx context.Context, toUserID, fromUserID, capsuleID uuid.UUID, capsuleName string) {
@@ -261,13 +262,26 @@ func (s *OutboxService) CapsuleUnfreezeVote(ctx context.Context, toUserID, fromU
 
 func (s *OutboxService) CapsuleUnlocked(ctx context.Context, toUserID, capsuleID uuid.UUID, capsuleName string, deliverAfter time.Time) {
 	title := "Capsule unlocked!"
-	body := "\"" + capsuleName + "\" is ready to open"
+	body := "\"" + capsuleName + "\" is ready to open ✨"
 	data := map[string]any{
 		"type":       "capsule_unlocked",
 		"capsule_id": capsuleID.String(),
 	}
 	if err := s.EnqueueAt(ctx, toUserID, CategoryCapsuleUnlock, title, body, data, nil, deliverAfter); err != nil {
 		slog.ErrorContext(ctx, "notifications: enqueue capsule unlocked", "error", err)
+	}
+}
+
+func (s *OutboxService) CapsuleUnlockSoon(ctx context.Context, toUserID, capsuleID uuid.UUID, capsuleName string, deliverAfter time.Time) {
+	title := capsuleName + " unlocks in 10 minutes 🔓"
+	body := "Get ready, your sealed memories are about to be revealed!"
+	data := map[string]any{
+		"type":         "capsule_unlock_soon",
+		"capsule_id":   capsuleID.String(),
+		"capsule_name": capsuleName,
+	}
+	if err := s.EnqueueAt(ctx, toUserID, CategoryCapsuleUnlock, title, body, data, nil, deliverAfter); err != nil {
+		slog.ErrorContext(ctx, "notifications: enqueue capsule unlock soon", "error", err)
 	}
 }
 

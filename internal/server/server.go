@@ -78,6 +78,7 @@ func New(pool *pgxpool.Pool, cfg *config.Config, m mailer.Mailer, store *media.S
 			Mailer:  m,
 			Secret:  []byte(cfg.JWTSecret),
 			Limiter: limiter,
+			Env:     cfg.Env,
 		},
 		users: &users.Handler{Pool: pool, Q: q, Media: store},
 		media: &media.Handler{Q: q, Store: store, Env: cfg.Env},

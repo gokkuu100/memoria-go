@@ -32,6 +32,7 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Post("/notifications/test-push", h.sendTestPush)
 	r.Post("/notifications/read-all", h.markAllRead)
 	r.Post("/notifications/{id}/read", h.markRead)
+	r.Delete("/notifications/{id}", h.deleteNotification)
 	r.Post("/notifications/flush", h.flushOnOpen)
 }
 
@@ -177,6 +178,29 @@ func (h *Handler) markRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]string{"status": "read"})
+}
+
+// DELETE /v1/notifications/{id}
+func (h *Handler) deleteNotification(w http.ResponseWriter, r *http.Request) {
+	userID, _ := httpx.UserID(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "id must be a valid UUID")
+		return
+	}
+	rows, err := h.Q.DeleteNotificationForUser(r.Context(), dbgen.DeleteNotificationForUserParams{
+		ID:     pg.UUID(id),
+		UserID: pg.UUID(userID),
+	})
+	if err != nil {
+		httpx.InternalError(w, err)
+		return
+	}
+	if rows == 0 {
+		httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound, "notification not found")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // POST /v1/notifications/flush — deliver due notifications on app foreground.

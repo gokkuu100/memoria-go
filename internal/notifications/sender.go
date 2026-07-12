@@ -23,7 +23,7 @@ type Sender interface {
 	RefreshWidgetForUsers(ctx context.Context, userIDs []uuid.UUID)
 	CapsuleMemoryAdded(ctx context.Context, toUserID, fromUserID, capsuleID uuid.UUID, capsuleName string)
 	CommentOnMemory(ctx context.Context, toUserID, fromUserID, memoryID uuid.UUID)
-	ReactionOnMemory(ctx context.Context, toUserID, fromUserID, memoryID uuid.UUID)
+	ReactionOnMemory(ctx context.Context, toUserID, fromUserID, memoryID uuid.UUID, emoji string)
 	CapsuleInviteReceived(ctx context.Context, toUserID, fromUserID, capsuleID uuid.UUID, capsuleName string)
 	CapsuleInviteDeclined(ctx context.Context, toUserID, fromUserID, capsuleID uuid.UUID, capsuleName string)
 	CapsuleInviteExpired(ctx context.Context, toUserID, capsuleID uuid.UUID, capsuleName string)
@@ -32,6 +32,7 @@ type Sender interface {
 	CapsuleFrozen(ctx context.Context, toUserID, capsuleID uuid.UUID, capsuleName string)
 	CapsuleUnfreezeVote(ctx context.Context, toUserID, fromUserID, capsuleID uuid.UUID, capsuleName string)
 	CapsuleUnlocked(ctx context.Context, toUserID, capsuleID uuid.UUID, capsuleName string, deliverAfter time.Time)
+	CapsuleUnlockSoon(ctx context.Context, toUserID, capsuleID uuid.UUID, capsuleName string, deliverAfter time.Time)
 	CapsuleMemberLeft(ctx context.Context, toUserID, fromUserID, capsuleID uuid.UUID, capsuleName string)
 	CapsuleDeleted(ctx context.Context, toUserID, fromUserID, capsuleID uuid.UUID, capsuleName string)
 }
@@ -88,9 +89,9 @@ func (LogSender) CommentOnMemory(ctx context.Context, toUserID, fromUserID, memo
 		"to", toUserID, "from", fromUserID, "memory", memoryID)
 }
 
-func (LogSender) ReactionOnMemory(ctx context.Context, toUserID, fromUserID, memoryID uuid.UUID) {
+func (LogSender) ReactionOnMemory(ctx context.Context, toUserID, fromUserID, memoryID uuid.UUID, emoji string) {
 	slog.InfoContext(ctx, "notification: reaction_on_memory",
-		"to", toUserID, "from", fromUserID, "memory", memoryID)
+		"to", toUserID, "from", fromUserID, "memory", memoryID, "emoji", emoji)
 }
 
 func (LogSender) CapsuleInviteReceived(ctx context.Context, toUserID, fromUserID, capsuleID uuid.UUID, capsuleName string) {
@@ -130,6 +131,11 @@ func (LogSender) CapsuleUnfreezeVote(ctx context.Context, toUserID, fromUserID, 
 
 func (LogSender) CapsuleUnlocked(ctx context.Context, toUserID, capsuleID uuid.UUID, capsuleName string, deliverAfter time.Time) {
 	slog.InfoContext(ctx, "notification: capsule_unlocked",
+		"to", toUserID, "capsule", capsuleID, "name", capsuleName, "deliver_after", deliverAfter)
+}
+
+func (LogSender) CapsuleUnlockSoon(ctx context.Context, toUserID, capsuleID uuid.UUID, capsuleName string, deliverAfter time.Time) {
+	slog.InfoContext(ctx, "notification: capsule_unlock_soon",
 		"to", toUserID, "capsule", capsuleID, "name", capsuleName, "deliver_after", deliverAfter)
 }
 

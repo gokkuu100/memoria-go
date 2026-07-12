@@ -37,22 +37,23 @@ type Block struct {
 }
 
 type Capsule struct {
-	ID                 pgtype.UUID
-	CreatorID          pgtype.UUID
-	Name               string
-	Description        *string
-	Type               string
-	State              string
-	UnlockAt           pgtype.Timestamptz
-	InviteExpiresAt    pgtype.Timestamptz
-	FrozenAt           pgtype.Timestamptz
-	UnlockedAt         pgtype.Timestamptz
-	ViewableUntil      pgtype.Timestamptz
-	StreakCurrent      int32
-	StreakPerfect      bool
-	LastContributionAt pgtype.Timestamptz
-	FreezeWarningSent  bool
-	CreatedAt          pgtype.Timestamptz
+	ID                   pgtype.UUID
+	CreatorID            pgtype.UUID
+	Name                 string
+	Description          *string
+	Type                 string
+	State                string
+	UnlockAt             pgtype.Timestamptz
+	InviteExpiresAt      pgtype.Timestamptz
+	FrozenAt             pgtype.Timestamptz
+	UnlockedAt           pgtype.Timestamptz
+	ViewableUntil        pgtype.Timestamptz
+	StreakCurrent        int32
+	StreakPerfect        bool
+	LastContributionAt   pgtype.Timestamptz
+	FreezeWarningSent    bool
+	CreatedAt            pgtype.Timestamptz
+	UnlockReminderSentAt pgtype.Timestamptz
 }
 
 type CapsuleMember struct {
@@ -129,6 +130,15 @@ type Memory struct {
 	Caption       *string
 	CreatedAt     pgtype.Timestamptz
 	DeletedAt     pgtype.Timestamptz
+	CapturedAt    pgtype.Timestamptz
+}
+
+type MemoryIdempotency struct {
+	UserID         pgtype.UUID
+	IdempotencyKey pgtype.UUID
+	CapsuleID      pgtype.UUID
+	MemoryID       pgtype.UUID
+	CreatedAt      pgtype.Timestamptz
 }
 
 type NotificationOutbox struct {

@@ -181,6 +181,57 @@ func doJSON(t *testing.T, method, url, bearer string, body any, out any) int {
 	return resp.StatusCode
 }
 
+func doJSONWithHeaders(t *testing.T, method, url, bearer string, body any, headers map[string]string, out any) int {
+	t.Helper()
+	var buf bytes.Buffer
+	if body != nil {
+		if err := json.NewEncoder(&buf).Encode(body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	req, err := http.NewRequest(method, url, &buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if out != nil {
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			t.Fatalf("decoding response: %v", err)
+		}
+	}
+	return resp.StatusCode
+}
+
+func addCapsuleMemoryWithCapturedAt(t *testing.T, e *env, token, capID string, capturedAt time.Time, idempotencyKey string) (memoryID string, status int) {
+	t.Helper()
+	mediaID := uploadPhoto(t, e, token)
+	var mem struct {
+		ID         string    `json:"id"`
+		CapturedAt time.Time `json:"captured_at"`
+	}
+	headers := map[string]string{}
+	if idempotencyKey != "" {
+		headers["Idempotency-Key"] = idempotencyKey
+	}
+	status = doJSONWithHeaders(t, "POST", e.ts.URL+"/v1/capsules/"+capID+"/memories", token,
+		map[string]any{
+			"media_id":    mediaID,
+			"captured_at": capturedAt.UTC().Format(time.RFC3339Nano),
+		}, headers, &mem)
+	return mem.ID, status
+}
+
 func signUp(t *testing.T, e *env, email, username, displayName string) (token, userID string) {
 	t.Helper()
 	if status := doJSON(t, "POST", e.ts.URL+"/v1/auth/otp/request", "",
@@ -594,5 +645,101 @@ func TestCapsuleLimitEnforced(t *testing.T) {
 		"name": "Third", "type": "solo", "unlock_at": unlock,
 	}, &errResp); status != http.StatusForbidden || errResp.Error.Code != "capsule_limit_reached" {
 		t.Fatalf("third capsule: status %d code %q", status, errResp.Error.Code)
+	}
+}
+
+func TestCapturedAtPreservedOnMemory(t *testing.T) {
+	e := getEnv(t)
+	token, _ := signUp(t, e, uniq("cap_")+"@example.com", uniq("cap_"), "Cap")
+	capID := createSoloCapsule(t, e, token, 48*time.Hour)
+
+	time.Sleep(25 * time.Millisecond)
+	captured := time.Now().UTC()
+	memID, status := addCapsuleMemoryWithCapturedAt(t, e, token, capID, captured, "")
+	if status != http.StatusCreated || memID == "" {
+		t.Fatalf("add memory: status %d id %q", status, memID)
+	}
+
+	_, err := e.pool.Exec(context.Background(),
+		"UPDATE capsules SET unlock_at = now() - interval '1 minute' WHERE id = $1", capID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := capsules.RunUnlock(context.Background(), e.q, notifications.LogSender{}); err != nil {
+		t.Fatal(err)
+	}
+
+	var listed struct {
+		Memories []struct {
+			ID        string    `json:"id"`
+			CreatedAt time.Time `json:"created_at"`
+		} `json:"memories"`
+	}
+	if status := doJSON(t, "GET", e.ts.URL+"/v1/capsules/"+capID+"/memories", token, nil, &listed); status != http.StatusOK {
+		t.Fatalf("list memories: status %d", status)
+	}
+	if len(listed.Memories) != 1 {
+		t.Fatalf("memories = %d want 1", len(listed.Memories))
+	}
+	got := listed.Memories[0].CreatedAt.UTC()
+	if got.Before(captured.Add(-2 * time.Second)) || got.After(captured.Add(2 * time.Second)) {
+		t.Fatalf("timeline created_at %v want near captured %v", got, captured)
+	}
+}
+
+func TestMemoryIdempotencyKey(t *testing.T) {
+	e := getEnv(t)
+	token, _ := signUp(t, e, uniq("idem_")+"@example.com", uniq("idem_"), "Idem")
+	capID := createSoloCapsule(t, e, token, 48*time.Hour)
+	key := uuid.New().String()
+	time.Sleep(25 * time.Millisecond)
+	captured := time.Now().UTC()
+
+	id1, status1 := addCapsuleMemoryWithCapturedAt(t, e, token, capID, captured, key)
+	if status1 != http.StatusCreated {
+		t.Fatalf("first add: status %d", status1)
+	}
+	id2, status2 := addCapsuleMemoryWithCapturedAt(t, e, token, capID, captured, key)
+	if status2 != http.StatusOK {
+		t.Fatalf("retry add: status %d want 200", status2)
+	}
+	if id1 != id2 {
+		t.Fatalf("idempotency ids differ: %q vs %q", id1, id2)
+	}
+
+	var count int64
+	if err := e.pool.QueryRow(context.Background(),
+		"SELECT COUNT(*) FROM memories WHERE container_id = $1 AND deleted_at IS NULL", capID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("memory count = %d want 1", count)
+	}
+}
+
+func TestSyncDeadlineRejectedAfterUnlock(t *testing.T) {
+	e := getEnv(t)
+	token, _ := signUp(t, e, uniq("dead_")+"@example.com", uniq("dead_"), "Dead")
+	capID := createSoloCapsule(t, e, token, 1*time.Hour)
+
+	_, err := e.pool.Exec(context.Background(),
+		"UPDATE capsules SET unlock_at = now() - interval '1 minute' WHERE id = $1", capID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mediaID := uploadPhoto(t, e, token)
+	var errResp struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	captured := time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339)
+	if status := doJSON(t, "POST", e.ts.URL+"/v1/capsules/"+capID+"/memories", token,
+		map[string]string{"media_id": mediaID, "captured_at": captured}, &errResp); status != http.StatusForbidden {
+		t.Fatalf("post-deadline add: status %d want 403", status)
+	}
+	if errResp.Error.Code != "queue_sync_deadline_passed" {
+		t.Fatalf("code %q want queue_sync_deadline_passed", errResp.Error.Code)
 	}
 }

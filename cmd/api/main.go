@@ -179,6 +179,16 @@ func run() error {
 		return fmt.Errorf("registering jobs: %w", err)
 	}
 	if err := runner.Register(jobs.Job{
+		Name:    "unlock_reminder",
+		Spec:    "* * * * *",
+		LockKey: 1010,
+		Run: func(ctx context.Context) error {
+			return capsules.RunUnlockReminder(ctx, q, outbox)
+		},
+	}); err != nil {
+		return fmt.Errorf("registering jobs: %w", err)
+	}
+	if err := runner.Register(jobs.Job{
 		Name:    "flush_notification_batches",
 		Spec:    "*/5 * * * *",
 		LockKey: 1008,

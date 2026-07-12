@@ -19,7 +19,7 @@ JOIN memories m ON m.container_type = 'capsule'
   AND m.container_id = sd.capsule_id
   AND m.author_id = $1
   AND m.deleted_at IS NULL
-  AND (m.created_at AT TIME ZONE @tz::text)::date = sd.day
+  AND (m.captured_at AT TIME ZONE @tz::text)::date = sd.day
 WHERE cm.user_id = $1
   AND cm.invite_status = 'accepted'
   AND sd.day >= sqlc.arg('from_day')::date

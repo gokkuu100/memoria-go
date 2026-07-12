@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
+	"memoria-backend/internal/config"
 	"memoria-backend/internal/dbgen"
 	"memoria-backend/internal/httpx"
 	"memoria-backend/internal/mailer"
@@ -36,6 +37,18 @@ type Handler struct {
 	Mailer  mailer.Mailer
 	Secret  []byte
 	Limiter *Limiter
+	Env     config.Env
+}
+
+// allowIP applies an IP-keyed rate limit in production only. Like the global
+// middleware (server.RateLimitIP), IP limits are disabled in development so
+// local integration tests sharing 127.0.0.1 are not starved. Identity-keyed
+// limits (per email) stay on in every environment.
+func (h *Handler) allowIP(key string, limit int, window time.Duration) bool {
+	if h.Env != config.EnvProduction {
+		return true
+	}
+	return h.Limiter.Allow(key, limit, window)
 }
 
 func (h *Handler) Mount(r chi.Router) {
@@ -96,7 +109,7 @@ func (h *Handler) requestOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !h.Limiter.Allow("otp:email:"+email, OTPEmailLimit, OTPEmailWindow) ||
-		!h.Limiter.Allow("otp:ip:"+httpx.ClientIP(r), OTPIPRequest, OTPIPWindow) {
+		!h.allowIP("otp:ip:"+httpx.ClientIP(r), OTPIPRequest, OTPIPWindow) {
 		httpx.Error(w, http.StatusTooManyRequests, httpx.CodeRateLimited, "too many codes requested, try again later")
 		return
 	}
@@ -147,7 +160,7 @@ func (h *Handler) requestOTP(w http.ResponseWriter, r *http.Request) {
 
 // POST /v1/auth/otp/verify {email, purpose, code} -> {ticket}
 func (h *Handler) verifyOTP(w http.ResponseWriter, r *http.Request) {
-	if !h.Limiter.Allow("otp-verify:ip:"+httpx.ClientIP(r), OTPVerifyIP, OTPIPWindow) {
+	if !h.allowIP("otp-verify:ip:"+httpx.ClientIP(r), OTPVerifyIP, OTPIPWindow) {
 		httpx.Error(w, http.StatusTooManyRequests, httpx.CodeRateLimited, "too many attempts, try again later")
 		return
 	}
@@ -287,7 +300,7 @@ func (h *Handler) signup(w http.ResponseWriter, r *http.Request) {
 
 // GET /v1/auth/username-available?u=
 func (h *Handler) usernameAvailable(w http.ResponseWriter, r *http.Request) {
-	if !h.Limiter.Allow("uname:ip:"+httpx.ClientIP(r), UsernameIPLimit, UsernameIPWindow) {
+	if !h.allowIP("uname:ip:"+httpx.ClientIP(r), UsernameIPLimit, UsernameIPWindow) {
 		httpx.Error(w, http.StatusTooManyRequests, httpx.CodeRateLimited, "slow down")
 		return
 	}
@@ -315,7 +328,7 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, err.Error())
 		return
 	}
-	if !h.Limiter.Allow("login:ip:"+httpx.ClientIP(r), LoginIPLimit, LoginIPWindow) {
+	if !h.allowIP("login:ip:"+httpx.ClientIP(r), LoginIPLimit, LoginIPWindow) {
 		httpx.Error(w, http.StatusTooManyRequests, httpx.CodeRateLimited, "too many attempts, try again later")
 		return
 	}

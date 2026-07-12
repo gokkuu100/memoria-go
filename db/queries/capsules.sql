@@ -268,12 +268,12 @@ ORDER BY cm.accepted_at NULLS LAST, cm.user_id
 LIMIT 1;
 
 -- name: GetMemberLastCapsuleContribution :one
-SELECT created_at FROM memories
+SELECT captured_at FROM memories
 WHERE container_type = 'capsule'
   AND container_id = $1
   AND author_id = $2
   AND deleted_at IS NULL
-ORDER BY created_at DESC
+ORDER BY captured_at DESC
 LIMIT 1;
 
 -- name: CountMemoriesByAuthorInCapsule :one
@@ -314,9 +314,9 @@ WHERE m.container_type = 'capsule'
   AND m.deleted_at IS NULL
   AND (
     sqlc.narg('cursor_created_at')::timestamptz IS NULL
-    OR (m.created_at, m.id) > (sqlc.narg('cursor_created_at')::timestamptz, sqlc.narg('cursor_id')::uuid)
+    OR (m.captured_at, m.id) > (sqlc.narg('cursor_created_at')::timestamptz, sqlc.narg('cursor_id')::uuid)
   )
-ORDER BY m.created_at ASC, m.id ASC
+ORDER BY m.captured_at ASC, m.id ASC
 LIMIT sqlc.arg('page_limit');
 
 -- name: GetCapsuleUnlockStats :one
@@ -375,7 +375,7 @@ WHERE cm.invite_status = 'accepted'
 ORDER BY c.unlock_at;
 
 -- name: ListTimelineUnlockedCapsuleMemories :many
-SELECT m.id, m.container_id AS capsule_id, m.created_at,
+SELECT m.id, m.container_id AS capsule_id, m.captured_at,
        med.bucket_key AS media_key, c.name AS capsule_name
 FROM memories m
 JOIN media med ON med.id = m.media_id
@@ -387,6 +387,20 @@ WHERE m.container_type = 'capsule'
   AND cm.view_blocked = false
   AND c.state = 'unlocked'
   AND (c.viewable_until IS NULL OR c.viewable_until > now())
-  AND m.created_at >= $2
-  AND m.created_at < $3
-ORDER BY m.created_at;
+  AND m.captured_at >= $2
+  AND m.captured_at < $3
+ORDER BY m.captured_at;
+
+-- name: ListCapsulesDueUnlockReminder :many
+SELECT *
+FROM capsules
+WHERE state IN ('active', 'frozen')
+  AND unlock_reminder_sent_at IS NULL
+  AND unlock_at > now()
+  AND unlock_at <= now() + interval '10 minutes';
+
+-- name: MarkUnlockReminderSent :execrows
+UPDATE capsules
+SET unlock_reminder_sent_at = now()
+WHERE id = $1
+  AND unlock_reminder_sent_at IS NULL;

@@ -466,6 +466,7 @@ func (h *Handler) addMemory(w http.ResponseWriter, r *http.Request) {
 		MediaID:       pg.UUID(mediaID),
 		VoiceMediaID:  voiceID,
 		Caption:       req.Caption,
+		CapturedAt:    pg.Time(time.Now().UTC()),
 	})
 	if err != nil {
 		httpx.InternalError(w, err)
@@ -775,14 +776,14 @@ func (h *Handler) timeline(w http.ResponseWriter, r *http.Request) {
 	}
 
 	unlocked, err := h.Q.ListTimelineUnlockedCapsuleMemories(r.Context(), dbgen.ListTimelineUnlockedCapsuleMemoriesParams{
-		UserID: pg.UUID(userID), CreatedAt: pg.Time(start), CreatedAt_2: pg.Time(end),
+		UserID: pg.UUID(userID), CapturedAt: pg.Time(start), CapturedAt_2: pg.Time(end),
 	})
 	if err != nil {
 		httpx.InternalError(w, err)
 		return
 	}
 	for _, row := range unlocked {
-		day := pg.TimeValue(row.CreatedAt).UTC().Format("2006-01-02")
+		day := pg.TimeValue(row.CapturedAt).UTC().Format("2006-01-02")
 		url, err := h.Media.SignedURL(r.Context(), row.MediaKey, media.SignedURLTTL)
 		if err != nil {
 			httpx.InternalError(w, err)

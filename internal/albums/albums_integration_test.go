@@ -339,6 +339,70 @@ func TestPendingAlbumInActiveList(t *testing.T) {
 	}
 }
 
+func TestListReactionsWithUsers(t *testing.T) {
+	e := getEnv(t)
+	tokenA, idA := signUp(t, e, uniq("rx_a")+"@example.com", uniq("rxa_"), "ReactA")
+	tokenB, idB := signUp(t, e, uniq("rx_b")+"@example.com", uniq("rxb_"), "ReactB")
+	connectFriends(t, e, tokenA, idA, tokenB, idB)
+	albumID := createAcceptAlbum(t, e, tokenA, idB, tokenB)
+
+	mediaID, _ := uploadPhoto(t, e, tokenA)
+	var mem struct {
+		ID string `json:"id"`
+	}
+	if status := doJSON(t, "POST", e.ts.URL+"/v1/albums/"+albumID+"/memories", tokenA,
+		map[string]string{"media_id": mediaID}, &mem); status != http.StatusCreated {
+		t.Fatalf("add memory: status %d", status)
+	}
+
+	if status := doJSON(t, "PUT", e.ts.URL+"/v1/memories/"+mem.ID+"/reactions", tokenA,
+		map[string]string{"emoji": "🔥"}, nil); status != http.StatusOK {
+		t.Fatalf("react A: status %d", status)
+	}
+	if status := doJSON(t, "PUT", e.ts.URL+"/v1/memories/"+mem.ID+"/reactions", tokenB,
+		map[string]string{"emoji": "❤️"}, nil); status != http.StatusOK {
+		t.Fatalf("react B: status %d", status)
+	}
+
+	var list struct {
+		Reactions []struct {
+			User struct {
+				ID          string `json:"id"`
+				DisplayName string `json:"display_name"`
+			} `json:"user"`
+			Emoji string `json:"emoji"`
+		} `json:"reactions"`
+		MyEmoji *string `json:"my_emoji"`
+	}
+	if status := doJSON(t, "GET", e.ts.URL+"/v1/memories/"+mem.ID+"/reactions", tokenA, nil, &list); status != http.StatusOK {
+		t.Fatalf("list reactions: status %d", status)
+	}
+	if len(list.Reactions) != 2 {
+		t.Fatalf("reactions = %d, want 2", len(list.Reactions))
+	}
+	if list.MyEmoji == nil || *list.MyEmoji != "🔥" {
+		t.Fatalf("my_emoji = %v, want 🔥", list.MyEmoji)
+	}
+	byUser := map[string]string{}
+	for _, r := range list.Reactions {
+		byUser[r.User.ID] = r.Emoji
+	}
+	if byUser[idA] != "🔥" || byUser[idB] != "❤️" {
+		t.Fatalf("reactions by user = %v", byUser)
+	}
+
+	// Removing my reaction clears my_emoji and drops the row.
+	if status := doJSON(t, "DELETE", e.ts.URL+"/v1/memories/"+mem.ID+"/reactions", tokenA, nil, nil); status != http.StatusNoContent {
+		t.Fatalf("delete reaction: status %d", status)
+	}
+	if status := doJSON(t, "GET", e.ts.URL+"/v1/memories/"+mem.ID+"/reactions", tokenA, nil, &list); status != http.StatusOK {
+		t.Fatalf("list after delete: status %d", status)
+	}
+	if len(list.Reactions) != 1 || list.MyEmoji != nil {
+		t.Fatalf("after delete: reactions %d my_emoji %v, want 1 and nil", len(list.Reactions), list.MyEmoji)
+	}
+}
+
 func TestFullAlbumLifecycle(t *testing.T) {
 	e := getEnv(t)
 	tokenA, idA := signUp(t, e, uniq("alb_a")+"@example.com", uniq("alice_"), "Alice")

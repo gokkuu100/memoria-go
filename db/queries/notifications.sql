@@ -47,6 +47,12 @@ WHERE user_id = $1
   AND sent_at IS NOT NULL
   AND read_at IS NULL;
 
+-- name: DeleteNotificationForUser :execrows
+DELETE FROM notification_outbox
+WHERE id = $1
+  AND user_id = $2
+  AND sent_at IS NOT NULL;
+
 -- name: MarkNotificationRead :execrows
 UPDATE notification_outbox
 SET read_at = now()

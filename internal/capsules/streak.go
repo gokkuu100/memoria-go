@@ -11,14 +11,14 @@ import (
 )
 
 // RecordContribution updates streak state after a new memory is added.
-func RecordContribution(ctx context.Context, q *dbgen.Queries, capsuleID uuid.UUID, now time.Time) error {
+// contributedAt is when the memory was captured (not necessarily when it synced).
+func RecordContribution(ctx context.Context, q *dbgen.Queries, capsuleID uuid.UUID, contributedAt time.Time) error {
 	cid := pg.UUID(capsuleID)
-	today := dateUTC(now)
-	yesterday := today.AddDate(0, 0, -1)
+	contribDay := dateUTC(contributedAt.UTC())
 
 	if err := q.UpsertStreakDay(ctx, dbgen.UpsertStreakDayParams{
 		CapsuleID: cid,
-		Day:       pg.Date(today),
+		Day:       pg.Date(contribDay),
 	}); err != nil {
 		return err
 	}
@@ -28,21 +28,30 @@ func RecordContribution(ctx context.Context, q *dbgen.Queries, capsuleID uuid.UU
 		return err
 	}
 
-	streak := int32(1)
-	hadYesterday, err := q.HasStreakDay(ctx, dbgen.HasStreakDayParams{
-		CapsuleID: cid,
-		Day:       pg.Date(yesterday),
-	})
-	if err != nil {
-		return err
+	newLastContrib := contributedAt.UTC()
+	if capsule.LastContributionAt.Valid && !contributedAt.After(capsule.LastContributionAt.Time) {
+		newLastContrib = capsule.LastContributionAt.Time
 	}
-	if hadYesterday {
-		streak = capsule.StreakCurrent + 1
+
+	streak := capsule.StreakCurrent
+	if !capsule.LastContributionAt.Valid || !contributedAt.Before(capsule.LastContributionAt.Time) {
+		streak = int32(1)
+		yesterday := contribDay.AddDate(0, 0, -1)
+		hadYesterday, err := q.HasStreakDay(ctx, dbgen.HasStreakDayParams{
+			CapsuleID: cid,
+			Day:       pg.Date(yesterday),
+		})
+		if err != nil {
+			return err
+		}
+		if hadYesterday {
+			streak = capsule.StreakCurrent + 1
+		}
 	}
 
 	return q.UpdateCapsuleLastContribution(ctx, dbgen.UpdateCapsuleLastContributionParams{
 		ID:                 cid,
-		LastContributionAt: pg.Time(now),
+		LastContributionAt: pg.Time(newLastContrib),
 		StreakCurrent:      streak,
 	})
 }

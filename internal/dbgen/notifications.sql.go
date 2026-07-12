@@ -84,6 +84,26 @@ func (q *Queries) CreateOutbox(ctx context.Context, arg CreateOutboxParams) (Not
 	return i, err
 }
 
+const deleteNotificationForUser = `-- name: DeleteNotificationForUser :execrows
+DELETE FROM notification_outbox
+WHERE id = $1
+  AND user_id = $2
+  AND sent_at IS NOT NULL
+`
+
+type DeleteNotificationForUserParams struct {
+	ID     pgtype.UUID
+	UserID pgtype.UUID
+}
+
+func (q *Queries) DeleteNotificationForUser(ctx context.Context, arg DeleteNotificationForUserParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteNotificationForUser, arg.ID, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteOutboxRows = `-- name: DeleteOutboxRows :exec
 DELETE FROM notification_outbox
 WHERE id = ANY($1::uuid[])

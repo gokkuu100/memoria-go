@@ -251,8 +251,8 @@ func TestHeatmapSparkThreeMonthWindow(t *testing.T) {
 
 	for _, day := range []time.Time{oldDay, recentDay} {
 		if _, err := e.pool.Exec(context.Background(), `
-			INSERT INTO memories (container_type, container_id, author_id, media_id, created_at)
-			VALUES ('album', $1, $2, $3, $4)
+			INSERT INTO memories (container_type, container_id, author_id, media_id, created_at, captured_at)
+			VALUES ('album', $1, $2, $3, $4, $4)
 		`, album.ID, uid, mediaRow.ID, day); err != nil {
 			t.Fatal(err)
 		}

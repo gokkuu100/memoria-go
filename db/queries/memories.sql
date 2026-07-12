@@ -1,7 +1,17 @@
 -- name: CreateMemory :one
-INSERT INTO memories (container_type, container_id, author_id, media_id, voice_media_id, caption)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO memories (container_type, container_id, author_id, media_id, voice_media_id, caption, captured_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING *;
+
+-- name: GetMemoryIdempotency :one
+SELECT user_id, idempotency_key, capsule_id, memory_id, created_at
+FROM memory_idempotency
+WHERE user_id = $1 AND idempotency_key = $2;
+
+-- name: CreateMemoryIdempotency :one
+INSERT INTO memory_idempotency (user_id, idempotency_key, capsule_id, memory_id)
+VALUES ($1, $2, $3, $4)
+RETURNING user_id, idempotency_key, capsule_id, memory_id, created_at;
 
 -- name: GetMemoryByID :one
 SELECT * FROM memories WHERE id = $1 AND deleted_at IS NULL;
@@ -88,6 +98,13 @@ INSERT INTO reactions (memory_id, user_id, emoji)
 VALUES ($1, $2, $3)
 ON CONFLICT (memory_id, user_id) DO UPDATE SET emoji = EXCLUDED.emoji, created_at = now()
 RETURNING *;
+
+-- name: ListReactions :many
+SELECT r.emoji, r.created_at, u.id AS user_id, u.username, u.display_name
+FROM reactions r
+JOIN users u ON u.id = r.user_id
+WHERE r.memory_id = $1
+ORDER BY r.created_at DESC;
 
 -- name: DeleteReaction :execrows
 DELETE FROM reactions WHERE memory_id = $1 AND user_id = $2;

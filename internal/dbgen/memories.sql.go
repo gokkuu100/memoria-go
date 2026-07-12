@@ -73,9 +73,9 @@ func (q *Queries) CreateComment(ctx context.Context, arg CreateCommentParams) (C
 }
 
 const createMemory = `-- name: CreateMemory :one
-INSERT INTO memories (container_type, container_id, author_id, media_id, voice_media_id, caption)
-VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, container_type, container_id, author_id, media_id, voice_media_id, caption, created_at, deleted_at
+INSERT INTO memories (container_type, container_id, author_id, media_id, voice_media_id, caption, captured_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, container_type, container_id, author_id, media_id, voice_media_id, caption, created_at, deleted_at, captured_at
 `
 
 type CreateMemoryParams struct {
@@ -85,6 +85,7 @@ type CreateMemoryParams struct {
 	MediaID       pgtype.UUID
 	VoiceMediaID  pgtype.UUID
 	Caption       *string
+	CapturedAt    pgtype.Timestamptz
 }
 
 func (q *Queries) CreateMemory(ctx context.Context, arg CreateMemoryParams) (Memory, error) {
@@ -95,6 +96,7 @@ func (q *Queries) CreateMemory(ctx context.Context, arg CreateMemoryParams) (Mem
 		arg.MediaID,
 		arg.VoiceMediaID,
 		arg.Caption,
+		arg.CapturedAt,
 	)
 	var i Memory
 	err := row.Scan(
@@ -107,6 +109,38 @@ func (q *Queries) CreateMemory(ctx context.Context, arg CreateMemoryParams) (Mem
 		&i.Caption,
 		&i.CreatedAt,
 		&i.DeletedAt,
+		&i.CapturedAt,
+	)
+	return i, err
+}
+
+const createMemoryIdempotency = `-- name: CreateMemoryIdempotency :one
+INSERT INTO memory_idempotency (user_id, idempotency_key, capsule_id, memory_id)
+VALUES ($1, $2, $3, $4)
+RETURNING user_id, idempotency_key, capsule_id, memory_id, created_at
+`
+
+type CreateMemoryIdempotencyParams struct {
+	UserID         pgtype.UUID
+	IdempotencyKey pgtype.UUID
+	CapsuleID      pgtype.UUID
+	MemoryID       pgtype.UUID
+}
+
+func (q *Queries) CreateMemoryIdempotency(ctx context.Context, arg CreateMemoryIdempotencyParams) (MemoryIdempotency, error) {
+	row := q.db.QueryRow(ctx, createMemoryIdempotency,
+		arg.UserID,
+		arg.IdempotencyKey,
+		arg.CapsuleID,
+		arg.MemoryID,
+	)
+	var i MemoryIdempotency
+	err := row.Scan(
+		&i.UserID,
+		&i.IdempotencyKey,
+		&i.CapsuleID,
+		&i.MemoryID,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -164,7 +198,7 @@ func (q *Queries) GetCommentByID(ctx context.Context, id pgtype.UUID) (Comment, 
 }
 
 const getMemoryByID = `-- name: GetMemoryByID :one
-SELECT id, container_type, container_id, author_id, media_id, voice_media_id, caption, created_at, deleted_at FROM memories WHERE id = $1 AND deleted_at IS NULL
+SELECT id, container_type, container_id, author_id, media_id, voice_media_id, caption, created_at, deleted_at, captured_at FROM memories WHERE id = $1 AND deleted_at IS NULL
 `
 
 func (q *Queries) GetMemoryByID(ctx context.Context, id pgtype.UUID) (Memory, error) {
@@ -180,6 +214,31 @@ func (q *Queries) GetMemoryByID(ctx context.Context, id pgtype.UUID) (Memory, er
 		&i.Caption,
 		&i.CreatedAt,
 		&i.DeletedAt,
+		&i.CapturedAt,
+	)
+	return i, err
+}
+
+const getMemoryIdempotency = `-- name: GetMemoryIdempotency :one
+SELECT user_id, idempotency_key, capsule_id, memory_id, created_at
+FROM memory_idempotency
+WHERE user_id = $1 AND idempotency_key = $2
+`
+
+type GetMemoryIdempotencyParams struct {
+	UserID         pgtype.UUID
+	IdempotencyKey pgtype.UUID
+}
+
+func (q *Queries) GetMemoryIdempotency(ctx context.Context, arg GetMemoryIdempotencyParams) (MemoryIdempotency, error) {
+	row := q.db.QueryRow(ctx, getMemoryIdempotency, arg.UserID, arg.IdempotencyKey)
+	var i MemoryIdempotency
+	err := row.Scan(
+		&i.UserID,
+		&i.IdempotencyKey,
+		&i.CapsuleID,
+		&i.MemoryID,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -194,7 +253,7 @@ func (q *Queries) HardDeleteMemory(ctx context.Context, id pgtype.UUID) error {
 }
 
 const listAlbumMemories = `-- name: ListAlbumMemories :many
-SELECT m.id, m.container_type, m.container_id, m.author_id, m.media_id, m.voice_media_id, m.caption, m.created_at, m.deleted_at,
+SELECT m.id, m.container_type, m.container_id, m.author_id, m.media_id, m.voice_media_id, m.caption, m.created_at, m.deleted_at, m.captured_at,
        (SELECT COUNT(*)::bigint FROM reactions r WHERE r.memory_id = m.id) AS reaction_count,
        (SELECT COUNT(*)::bigint FROM comments c WHERE c.memory_id = m.id) AS comment_count,
        COALESCE(
@@ -239,6 +298,7 @@ type ListAlbumMemoriesRow struct {
 	Caption        *string
 	CreatedAt      pgtype.Timestamptz
 	DeletedAt      pgtype.Timestamptz
+	CapturedAt     pgtype.Timestamptz
 	ReactionCount  int64
 	CommentCount   int64
 	ReactionEmojis interface{}
@@ -268,6 +328,7 @@ func (q *Queries) ListAlbumMemories(ctx context.Context, arg ListAlbumMemoriesPa
 			&i.Caption,
 			&i.CreatedAt,
 			&i.DeletedAt,
+			&i.CapturedAt,
 			&i.ReactionCount,
 			&i.CommentCount,
 			&i.ReactionEmojis,
@@ -448,7 +509,7 @@ func (q *Queries) ListComments(ctx context.Context, arg ListCommentsParams) ([]L
 }
 
 const listMemoriesByAuthorInAlbum = `-- name: ListMemoriesByAuthorInAlbum :many
-SELECT m.id, m.container_type, m.container_id, m.author_id, m.media_id, m.voice_media_id, m.caption, m.created_at, m.deleted_at, med.bucket_key AS media_key, vm.bucket_key AS voice_key
+SELECT m.id, m.container_type, m.container_id, m.author_id, m.media_id, m.voice_media_id, m.caption, m.created_at, m.deleted_at, m.captured_at, med.bucket_key AS media_key, vm.bucket_key AS voice_key
 FROM memories m
 JOIN media med ON med.id = m.media_id
 LEFT JOIN media vm ON vm.id = m.voice_media_id
@@ -473,6 +534,7 @@ type ListMemoriesByAuthorInAlbumRow struct {
 	Caption       *string
 	CreatedAt     pgtype.Timestamptz
 	DeletedAt     pgtype.Timestamptz
+	CapturedAt    pgtype.Timestamptz
 	MediaKey      string
 	VoiceKey      *string
 }
@@ -496,8 +558,51 @@ func (q *Queries) ListMemoriesByAuthorInAlbum(ctx context.Context, arg ListMemor
 			&i.Caption,
 			&i.CreatedAt,
 			&i.DeletedAt,
+			&i.CapturedAt,
 			&i.MediaKey,
 			&i.VoiceKey,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listReactions = `-- name: ListReactions :many
+SELECT r.emoji, r.created_at, u.id AS user_id, u.username, u.display_name
+FROM reactions r
+JOIN users u ON u.id = r.user_id
+WHERE r.memory_id = $1
+ORDER BY r.created_at DESC
+`
+
+type ListReactionsRow struct {
+	Emoji       string
+	CreatedAt   pgtype.Timestamptz
+	UserID      pgtype.UUID
+	Username    string
+	DisplayName string
+}
+
+func (q *Queries) ListReactions(ctx context.Context, memoryID pgtype.UUID) ([]ListReactionsRow, error) {
+	rows, err := q.db.Query(ctx, listReactions, memoryID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListReactionsRow
+	for rows.Next() {
+		var i ListReactionsRow
+		if err := rows.Scan(
+			&i.Emoji,
+			&i.CreatedAt,
+			&i.UserID,
+			&i.Username,
+			&i.DisplayName,
 		); err != nil {
 			return nil, err
 		}

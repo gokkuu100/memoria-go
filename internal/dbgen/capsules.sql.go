@@ -42,7 +42,7 @@ const activateCapsule = `-- name: ActivateCapsule :one
 UPDATE capsules
 SET state = 'active'
 WHERE id = $1 AND state = 'pending'
-RETURNING id, creator_id, name, description, type, state, unlock_at, invite_expires_at, frozen_at, unlocked_at, viewable_until, streak_current, streak_perfect, last_contribution_at, freeze_warning_sent, created_at
+RETURNING id, creator_id, name, description, type, state, unlock_at, invite_expires_at, frozen_at, unlocked_at, viewable_until, streak_current, streak_perfect, last_contribution_at, freeze_warning_sent, created_at, unlock_reminder_sent_at
 `
 
 func (q *Queries) ActivateCapsule(ctx context.Context, id pgtype.UUID) (Capsule, error) {
@@ -65,6 +65,7 @@ func (q *Queries) ActivateCapsule(ctx context.Context, id pgtype.UUID) (Capsule,
 		&i.LastContributionAt,
 		&i.FreezeWarningSent,
 		&i.CreatedAt,
+		&i.UnlockReminderSentAt,
 	)
 	return i, err
 }
@@ -110,7 +111,7 @@ func (q *Queries) AddUnfreezeVote(ctx context.Context, arg AddUnfreezeVoteParams
 }
 
 const archiveCapsule = `-- name: ArchiveCapsule :one
-UPDATE capsules SET state = 'archived' WHERE id = $1 AND state = 'unlocked' RETURNING id, creator_id, name, description, type, state, unlock_at, invite_expires_at, frozen_at, unlocked_at, viewable_until, streak_current, streak_perfect, last_contribution_at, freeze_warning_sent, created_at
+UPDATE capsules SET state = 'archived' WHERE id = $1 AND state = 'unlocked' RETURNING id, creator_id, name, description, type, state, unlock_at, invite_expires_at, frozen_at, unlocked_at, viewable_until, streak_current, streak_perfect, last_contribution_at, freeze_warning_sent, created_at, unlock_reminder_sent_at
 `
 
 func (q *Queries) ArchiveCapsule(ctx context.Context, id pgtype.UUID) (Capsule, error) {
@@ -133,6 +134,7 @@ func (q *Queries) ArchiveCapsule(ctx context.Context, id pgtype.UUID) (Capsule, 
 		&i.LastContributionAt,
 		&i.FreezeWarningSent,
 		&i.CreatedAt,
+		&i.UnlockReminderSentAt,
 	)
 	return i, err
 }
@@ -253,7 +255,7 @@ const createCapsule = `-- name: CreateCapsule :one
 INSERT INTO capsules (
     creator_id, name, description, type, state, unlock_at, invite_expires_at
 ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, creator_id, name, description, type, state, unlock_at, invite_expires_at, frozen_at, unlocked_at, viewable_until, streak_current, streak_perfect, last_contribution_at, freeze_warning_sent, created_at
+RETURNING id, creator_id, name, description, type, state, unlock_at, invite_expires_at, frozen_at, unlocked_at, viewable_until, streak_current, streak_perfect, last_contribution_at, freeze_warning_sent, created_at, unlock_reminder_sent_at
 `
 
 type CreateCapsuleParams struct {
@@ -294,6 +296,7 @@ func (q *Queries) CreateCapsule(ctx context.Context, arg CreateCapsuleParams) (C
 		&i.LastContributionAt,
 		&i.FreezeWarningSent,
 		&i.CreatedAt,
+		&i.UnlockReminderSentAt,
 	)
 	return i, err
 }
@@ -344,7 +347,7 @@ const freezeCapsule = `-- name: FreezeCapsule :one
 UPDATE capsules
 SET state = 'frozen', frozen_at = now(), streak_perfect = false
 WHERE id = $1 AND state = 'active'
-RETURNING id, creator_id, name, description, type, state, unlock_at, invite_expires_at, frozen_at, unlocked_at, viewable_until, streak_current, streak_perfect, last_contribution_at, freeze_warning_sent, created_at
+RETURNING id, creator_id, name, description, type, state, unlock_at, invite_expires_at, frozen_at, unlocked_at, viewable_until, streak_current, streak_perfect, last_contribution_at, freeze_warning_sent, created_at, unlock_reminder_sent_at
 `
 
 func (q *Queries) FreezeCapsule(ctx context.Context, id pgtype.UUID) (Capsule, error) {
@@ -367,12 +370,13 @@ func (q *Queries) FreezeCapsule(ctx context.Context, id pgtype.UUID) (Capsule, e
 		&i.LastContributionAt,
 		&i.FreezeWarningSent,
 		&i.CreatedAt,
+		&i.UnlockReminderSentAt,
 	)
 	return i, err
 }
 
 const getCapsuleByID = `-- name: GetCapsuleByID :one
-SELECT id, creator_id, name, description, type, state, unlock_at, invite_expires_at, frozen_at, unlocked_at, viewable_until, streak_current, streak_perfect, last_contribution_at, freeze_warning_sent, created_at FROM capsules WHERE id = $1
+SELECT id, creator_id, name, description, type, state, unlock_at, invite_expires_at, frozen_at, unlocked_at, viewable_until, streak_current, streak_perfect, last_contribution_at, freeze_warning_sent, created_at, unlock_reminder_sent_at FROM capsules WHERE id = $1
 `
 
 func (q *Queries) GetCapsuleByID(ctx context.Context, id pgtype.UUID) (Capsule, error) {
@@ -395,6 +399,7 @@ func (q *Queries) GetCapsuleByID(ctx context.Context, id pgtype.UUID) (Capsule, 
 		&i.LastContributionAt,
 		&i.FreezeWarningSent,
 		&i.CreatedAt,
+		&i.UnlockReminderSentAt,
 	)
 	return i, err
 }
@@ -486,12 +491,12 @@ func (q *Queries) GetLastCapsuleContributor(ctx context.Context, id pgtype.UUID)
 }
 
 const getMemberLastCapsuleContribution = `-- name: GetMemberLastCapsuleContribution :one
-SELECT created_at FROM memories
+SELECT captured_at FROM memories
 WHERE container_type = 'capsule'
   AND container_id = $1
   AND author_id = $2
   AND deleted_at IS NULL
-ORDER BY created_at DESC
+ORDER BY captured_at DESC
 LIMIT 1
 `
 
@@ -502,9 +507,9 @@ type GetMemberLastCapsuleContributionParams struct {
 
 func (q *Queries) GetMemberLastCapsuleContribution(ctx context.Context, arg GetMemberLastCapsuleContributionParams) (pgtype.Timestamptz, error) {
 	row := q.db.QueryRow(ctx, getMemberLastCapsuleContribution, arg.ContainerID, arg.AuthorID)
-	var created_at pgtype.Timestamptz
-	err := row.Scan(&created_at)
-	return created_at, err
+	var captured_at pgtype.Timestamptz
+	err := row.Scan(&captured_at)
+	return captured_at, err
 }
 
 const getMostReactedCapsuleMemory = `-- name: GetMostReactedCapsuleMemory :one
@@ -627,7 +632,7 @@ func (q *Queries) HasStreakDay(ctx context.Context, arg HasStreakDayParams) (boo
 }
 
 const listArchivedCapsulesPastViewable = `-- name: ListArchivedCapsulesPastViewable :many
-SELECT id, creator_id, name, description, type, state, unlock_at, invite_expires_at, frozen_at, unlocked_at, viewable_until, streak_current, streak_perfect, last_contribution_at, freeze_warning_sent, created_at FROM capsules
+SELECT id, creator_id, name, description, type, state, unlock_at, invite_expires_at, frozen_at, unlocked_at, viewable_until, streak_current, streak_perfect, last_contribution_at, freeze_warning_sent, created_at, unlock_reminder_sent_at FROM capsules
 WHERE state = 'unlocked'
   AND viewable_until IS NOT NULL
   AND viewable_until <= now()
@@ -661,6 +666,7 @@ func (q *Queries) ListArchivedCapsulesPastViewable(ctx context.Context) ([]Capsu
 			&i.LastContributionAt,
 			&i.FreezeWarningSent,
 			&i.CreatedAt,
+			&i.UnlockReminderSentAt,
 		); err != nil {
 			return nil, err
 		}
@@ -750,7 +756,7 @@ func (q *Queries) ListCapsuleMembers(ctx context.Context, capsuleID pgtype.UUID)
 }
 
 const listCapsuleMemories = `-- name: ListCapsuleMemories :many
-SELECT m.id, m.container_type, m.container_id, m.author_id, m.media_id, m.voice_media_id, m.caption, m.created_at, m.deleted_at,
+SELECT m.id, m.container_type, m.container_id, m.author_id, m.media_id, m.voice_media_id, m.caption, m.created_at, m.deleted_at, m.captured_at,
        (SELECT COUNT(*)::bigint FROM reactions r WHERE r.memory_id = m.id) AS reaction_count,
        (SELECT COUNT(*)::bigint FROM comments c WHERE c.memory_id = m.id) AS comment_count,
        COALESCE(
@@ -772,9 +778,9 @@ WHERE m.container_type = 'capsule'
   AND m.deleted_at IS NULL
   AND (
     $2::timestamptz IS NULL
-    OR (m.created_at, m.id) > ($2::timestamptz, $3::uuid)
+    OR (m.captured_at, m.id) > ($2::timestamptz, $3::uuid)
   )
-ORDER BY m.created_at ASC, m.id ASC
+ORDER BY m.captured_at ASC, m.id ASC
 LIMIT $4
 `
 
@@ -795,6 +801,7 @@ type ListCapsuleMemoriesRow struct {
 	Caption        *string
 	CreatedAt      pgtype.Timestamptz
 	DeletedAt      pgtype.Timestamptz
+	CapturedAt     pgtype.Timestamptz
 	ReactionCount  int64
 	CommentCount   int64
 	ReactionEmojis interface{}
@@ -824,6 +831,7 @@ func (q *Queries) ListCapsuleMemories(ctx context.Context, arg ListCapsuleMemori
 			&i.Caption,
 			&i.CreatedAt,
 			&i.DeletedAt,
+			&i.CapturedAt,
 			&i.ReactionCount,
 			&i.CommentCount,
 			&i.ReactionEmojis,
@@ -839,7 +847,7 @@ func (q *Queries) ListCapsuleMemories(ctx context.Context, arg ListCapsuleMemori
 }
 
 const listCapsulesDueUnlock = `-- name: ListCapsulesDueUnlock :many
-SELECT c.id, c.creator_id, c.name, c.description, c.type, c.state, c.unlock_at, c.invite_expires_at, c.frozen_at, c.unlocked_at, c.viewable_until, c.streak_current, c.streak_perfect, c.last_contribution_at, c.freeze_warning_sent, c.created_at, u.plan AS creator_plan
+SELECT c.id, c.creator_id, c.name, c.description, c.type, c.state, c.unlock_at, c.invite_expires_at, c.frozen_at, c.unlocked_at, c.viewable_until, c.streak_current, c.streak_perfect, c.last_contribution_at, c.freeze_warning_sent, c.created_at, c.unlock_reminder_sent_at, u.plan AS creator_plan
 FROM capsules c
 JOIN users u ON u.id = c.creator_id
 WHERE c.state IN ('active', 'frozen')
@@ -849,23 +857,24 @@ LIMIT 100
 `
 
 type ListCapsulesDueUnlockRow struct {
-	ID                 pgtype.UUID
-	CreatorID          pgtype.UUID
-	Name               string
-	Description        *string
-	Type               string
-	State              string
-	UnlockAt           pgtype.Timestamptz
-	InviteExpiresAt    pgtype.Timestamptz
-	FrozenAt           pgtype.Timestamptz
-	UnlockedAt         pgtype.Timestamptz
-	ViewableUntil      pgtype.Timestamptz
-	StreakCurrent      int32
-	StreakPerfect      bool
-	LastContributionAt pgtype.Timestamptz
-	FreezeWarningSent  bool
-	CreatedAt          pgtype.Timestamptz
-	CreatorPlan        string
+	ID                   pgtype.UUID
+	CreatorID            pgtype.UUID
+	Name                 string
+	Description          *string
+	Type                 string
+	State                string
+	UnlockAt             pgtype.Timestamptz
+	InviteExpiresAt      pgtype.Timestamptz
+	FrozenAt             pgtype.Timestamptz
+	UnlockedAt           pgtype.Timestamptz
+	ViewableUntil        pgtype.Timestamptz
+	StreakCurrent        int32
+	StreakPerfect        bool
+	LastContributionAt   pgtype.Timestamptz
+	FreezeWarningSent    bool
+	CreatedAt            pgtype.Timestamptz
+	UnlockReminderSentAt pgtype.Timestamptz
+	CreatorPlan          string
 }
 
 func (q *Queries) ListCapsulesDueUnlock(ctx context.Context) ([]ListCapsulesDueUnlockRow, error) {
@@ -894,6 +903,7 @@ func (q *Queries) ListCapsulesDueUnlock(ctx context.Context) ([]ListCapsulesDueU
 			&i.LastContributionAt,
 			&i.FreezeWarningSent,
 			&i.CreatedAt,
+			&i.UnlockReminderSentAt,
 			&i.CreatorPlan,
 		); err != nil {
 			return nil, err
@@ -906,8 +916,55 @@ func (q *Queries) ListCapsulesDueUnlock(ctx context.Context) ([]ListCapsulesDueU
 	return items, nil
 }
 
+const listCapsulesDueUnlockReminder = `-- name: ListCapsulesDueUnlockReminder :many
+SELECT id, creator_id, name, description, type, state, unlock_at, invite_expires_at, frozen_at, unlocked_at, viewable_until, streak_current, streak_perfect, last_contribution_at, freeze_warning_sent, created_at, unlock_reminder_sent_at
+FROM capsules
+WHERE state IN ('active', 'frozen')
+  AND unlock_reminder_sent_at IS NULL
+  AND unlock_at > now()
+  AND unlock_at <= now() + interval '10 minutes'
+`
+
+func (q *Queries) ListCapsulesDueUnlockReminder(ctx context.Context) ([]Capsule, error) {
+	rows, err := q.db.Query(ctx, listCapsulesDueUnlockReminder)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Capsule
+	for rows.Next() {
+		var i Capsule
+		if err := rows.Scan(
+			&i.ID,
+			&i.CreatorID,
+			&i.Name,
+			&i.Description,
+			&i.Type,
+			&i.State,
+			&i.UnlockAt,
+			&i.InviteExpiresAt,
+			&i.FrozenAt,
+			&i.UnlockedAt,
+			&i.ViewableUntil,
+			&i.StreakCurrent,
+			&i.StreakPerfect,
+			&i.LastContributionAt,
+			&i.FreezeWarningSent,
+			&i.CreatedAt,
+			&i.UnlockReminderSentAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCapsulesForUser = `-- name: ListCapsulesForUser :many
-SELECT c.id, c.creator_id, c.name, c.description, c.type, c.state, c.unlock_at, c.invite_expires_at, c.frozen_at, c.unlocked_at, c.viewable_until, c.streak_current, c.streak_perfect, c.last_contribution_at, c.freeze_warning_sent, c.created_at
+SELECT c.id, c.creator_id, c.name, c.description, c.type, c.state, c.unlock_at, c.invite_expires_at, c.frozen_at, c.unlocked_at, c.viewable_until, c.streak_current, c.streak_perfect, c.last_contribution_at, c.freeze_warning_sent, c.created_at, c.unlock_reminder_sent_at
 FROM capsules c
 JOIN capsule_members cm ON cm.capsule_id = c.id
 WHERE cm.user_id = $1
@@ -957,6 +1014,7 @@ func (q *Queries) ListCapsulesForUser(ctx context.Context, arg ListCapsulesForUs
 			&i.LastContributionAt,
 			&i.FreezeWarningSent,
 			&i.CreatedAt,
+			&i.UnlockReminderSentAt,
 		); err != nil {
 			return nil, err
 		}
@@ -969,7 +1027,7 @@ func (q *Queries) ListCapsulesForUser(ctx context.Context, arg ListCapsulesForUs
 }
 
 const listCapsulesNeedingFreezeWarning = `-- name: ListCapsulesNeedingFreezeWarning :many
-SELECT c.id, c.creator_id, c.name, c.description, c.type, c.state, c.unlock_at, c.invite_expires_at, c.frozen_at, c.unlocked_at, c.viewable_until, c.streak_current, c.streak_perfect, c.last_contribution_at, c.freeze_warning_sent, c.created_at FROM capsules c
+SELECT c.id, c.creator_id, c.name, c.description, c.type, c.state, c.unlock_at, c.invite_expires_at, c.frozen_at, c.unlocked_at, c.viewable_until, c.streak_current, c.streak_perfect, c.last_contribution_at, c.freeze_warning_sent, c.created_at, c.unlock_reminder_sent_at FROM capsules c
 WHERE c.state = 'active'
   AND c.last_contribution_at IS NOT NULL
   AND c.last_contribution_at <= now() - interval '5 days'
@@ -1005,6 +1063,7 @@ func (q *Queries) ListCapsulesNeedingFreezeWarning(ctx context.Context) ([]Capsu
 			&i.LastContributionAt,
 			&i.FreezeWarningSent,
 			&i.CreatedAt,
+			&i.UnlockReminderSentAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1017,7 +1076,7 @@ func (q *Queries) ListCapsulesNeedingFreezeWarning(ctx context.Context) ([]Capsu
 }
 
 const listCapsulesOwnedByUser = `-- name: ListCapsulesOwnedByUser :many
-SELECT id, creator_id, name, description, type, state, unlock_at, invite_expires_at, frozen_at, unlocked_at, viewable_until, streak_current, streak_perfect, last_contribution_at, freeze_warning_sent, created_at FROM capsules WHERE creator_id = $1 AND state NOT IN ('disintegrated', 'archived')
+SELECT id, creator_id, name, description, type, state, unlock_at, invite_expires_at, frozen_at, unlocked_at, viewable_until, streak_current, streak_perfect, last_contribution_at, freeze_warning_sent, created_at, unlock_reminder_sent_at FROM capsules WHERE creator_id = $1 AND state NOT IN ('disintegrated', 'archived')
 `
 
 func (q *Queries) ListCapsulesOwnedByUser(ctx context.Context, creatorID pgtype.UUID) ([]Capsule, error) {
@@ -1046,6 +1105,7 @@ func (q *Queries) ListCapsulesOwnedByUser(ctx context.Context, creatorID pgtype.
 			&i.LastContributionAt,
 			&i.FreezeWarningSent,
 			&i.CreatedAt,
+			&i.UnlockReminderSentAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1058,7 +1118,7 @@ func (q *Queries) ListCapsulesOwnedByUser(ctx context.Context, creatorID pgtype.
 }
 
 const listCapsulesToFreeze = `-- name: ListCapsulesToFreeze :many
-SELECT id, creator_id, name, description, type, state, unlock_at, invite_expires_at, frozen_at, unlocked_at, viewable_until, streak_current, streak_perfect, last_contribution_at, freeze_warning_sent, created_at FROM capsules
+SELECT id, creator_id, name, description, type, state, unlock_at, invite_expires_at, frozen_at, unlocked_at, viewable_until, streak_current, streak_perfect, last_contribution_at, freeze_warning_sent, created_at, unlock_reminder_sent_at FROM capsules
 WHERE state = 'active'
   AND (
     (last_contribution_at IS NOT NULL AND last_contribution_at <= now() - interval '7 days')
@@ -1094,6 +1154,7 @@ func (q *Queries) ListCapsulesToFreeze(ctx context.Context) ([]Capsule, error) {
 			&i.LastContributionAt,
 			&i.FreezeWarningSent,
 			&i.CreatedAt,
+			&i.UnlockReminderSentAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1106,7 +1167,7 @@ func (q *Queries) ListCapsulesToFreeze(ctx context.Context) ([]Capsule, error) {
 }
 
 const listPendingExpiredCapsules = `-- name: ListPendingExpiredCapsules :many
-SELECT id, creator_id, name, description, type, state, unlock_at, invite_expires_at, frozen_at, unlocked_at, viewable_until, streak_current, streak_perfect, last_contribution_at, freeze_warning_sent, created_at FROM capsules
+SELECT id, creator_id, name, description, type, state, unlock_at, invite_expires_at, frozen_at, unlocked_at, viewable_until, streak_current, streak_perfect, last_contribution_at, freeze_warning_sent, created_at, unlock_reminder_sent_at FROM capsules
 WHERE state = 'pending' AND invite_expires_at IS NOT NULL AND invite_expires_at <= now()
 ORDER BY invite_expires_at
 LIMIT 100
@@ -1138,6 +1199,7 @@ func (q *Queries) ListPendingExpiredCapsules(ctx context.Context) ([]Capsule, er
 			&i.LastContributionAt,
 			&i.FreezeWarningSent,
 			&i.CreatedAt,
+			&i.UnlockReminderSentAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1237,7 +1299,7 @@ func (q *Queries) ListTimelineCapsuleSealedMarkers(ctx context.Context, arg List
 }
 
 const listTimelineUnlockedCapsuleMemories = `-- name: ListTimelineUnlockedCapsuleMemories :many
-SELECT m.id, m.container_id AS capsule_id, m.created_at,
+SELECT m.id, m.container_id AS capsule_id, m.captured_at,
        med.bucket_key AS media_key, c.name AS capsule_name
 FROM memories m
 JOIN media med ON med.id = m.media_id
@@ -1249,27 +1311,27 @@ WHERE m.container_type = 'capsule'
   AND cm.view_blocked = false
   AND c.state = 'unlocked'
   AND (c.viewable_until IS NULL OR c.viewable_until > now())
-  AND m.created_at >= $2
-  AND m.created_at < $3
-ORDER BY m.created_at
+  AND m.captured_at >= $2
+  AND m.captured_at < $3
+ORDER BY m.captured_at
 `
 
 type ListTimelineUnlockedCapsuleMemoriesParams struct {
-	UserID      pgtype.UUID
-	CreatedAt   pgtype.Timestamptz
-	CreatedAt_2 pgtype.Timestamptz
+	UserID       pgtype.UUID
+	CapturedAt   pgtype.Timestamptz
+	CapturedAt_2 pgtype.Timestamptz
 }
 
 type ListTimelineUnlockedCapsuleMemoriesRow struct {
 	ID          pgtype.UUID
 	CapsuleID   pgtype.UUID
-	CreatedAt   pgtype.Timestamptz
+	CapturedAt  pgtype.Timestamptz
 	MediaKey    string
 	CapsuleName string
 }
 
 func (q *Queries) ListTimelineUnlockedCapsuleMemories(ctx context.Context, arg ListTimelineUnlockedCapsuleMemoriesParams) ([]ListTimelineUnlockedCapsuleMemoriesRow, error) {
-	rows, err := q.db.Query(ctx, listTimelineUnlockedCapsuleMemories, arg.UserID, arg.CreatedAt, arg.CreatedAt_2)
+	rows, err := q.db.Query(ctx, listTimelineUnlockedCapsuleMemories, arg.UserID, arg.CapturedAt, arg.CapturedAt_2)
 	if err != nil {
 		return nil, err
 	}
@@ -1280,7 +1342,7 @@ func (q *Queries) ListTimelineUnlockedCapsuleMemories(ctx context.Context, arg L
 		if err := rows.Scan(
 			&i.ID,
 			&i.CapsuleID,
-			&i.CreatedAt,
+			&i.CapturedAt,
 			&i.MediaKey,
 			&i.CapsuleName,
 		); err != nil {
@@ -1295,7 +1357,7 @@ func (q *Queries) ListTimelineUnlockedCapsuleMemories(ctx context.Context, arg L
 }
 
 const markCapsuleDisintegrated = `-- name: MarkCapsuleDisintegrated :one
-UPDATE capsules SET state = 'disintegrated' WHERE id = $1 RETURNING id, creator_id, name, description, type, state, unlock_at, invite_expires_at, frozen_at, unlocked_at, viewable_until, streak_current, streak_perfect, last_contribution_at, freeze_warning_sent, created_at
+UPDATE capsules SET state = 'disintegrated' WHERE id = $1 RETURNING id, creator_id, name, description, type, state, unlock_at, invite_expires_at, frozen_at, unlocked_at, viewable_until, streak_current, streak_perfect, last_contribution_at, freeze_warning_sent, created_at, unlock_reminder_sent_at
 `
 
 func (q *Queries) MarkCapsuleDisintegrated(ctx context.Context, id pgtype.UUID) (Capsule, error) {
@@ -1318,6 +1380,7 @@ func (q *Queries) MarkCapsuleDisintegrated(ctx context.Context, id pgtype.UUID) 
 		&i.LastContributionAt,
 		&i.FreezeWarningSent,
 		&i.CreatedAt,
+		&i.UnlockReminderSentAt,
 	)
 	return i, err
 }
@@ -1356,6 +1419,21 @@ UPDATE capsules SET freeze_warning_sent = true WHERE id = $1
 func (q *Queries) MarkFreezeWarningSent(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, markFreezeWarningSent, id)
 	return err
+}
+
+const markUnlockReminderSent = `-- name: MarkUnlockReminderSent :execrows
+UPDATE capsules
+SET unlock_reminder_sent_at = now()
+WHERE id = $1
+  AND unlock_reminder_sent_at IS NULL
+`
+
+func (q *Queries) MarkUnlockReminderSent(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, markUnlockReminderSent, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const removeCapsuleMember = `-- name: RemoveCapsuleMember :exec
@@ -1502,7 +1580,7 @@ const unfreezeCapsule = `-- name: UnfreezeCapsule :one
 UPDATE capsules
 SET state = 'active', frozen_at = NULL, streak_current = 0, freeze_warning_sent = false
 WHERE id = $1 AND state = 'frozen'
-RETURNING id, creator_id, name, description, type, state, unlock_at, invite_expires_at, frozen_at, unlocked_at, viewable_until, streak_current, streak_perfect, last_contribution_at, freeze_warning_sent, created_at
+RETURNING id, creator_id, name, description, type, state, unlock_at, invite_expires_at, frozen_at, unlocked_at, viewable_until, streak_current, streak_perfect, last_contribution_at, freeze_warning_sent, created_at, unlock_reminder_sent_at
 `
 
 func (q *Queries) UnfreezeCapsule(ctx context.Context, id pgtype.UUID) (Capsule, error) {
@@ -1525,6 +1603,7 @@ func (q *Queries) UnfreezeCapsule(ctx context.Context, id pgtype.UUID) (Capsule,
 		&i.LastContributionAt,
 		&i.FreezeWarningSent,
 		&i.CreatedAt,
+		&i.UnlockReminderSentAt,
 	)
 	return i, err
 }
@@ -1533,7 +1612,7 @@ const unlockCapsule = `-- name: UnlockCapsule :one
 UPDATE capsules
 SET state = 'unlocked', unlocked_at = now(), viewable_until = $2
 WHERE id = $1 AND state IN ('active', 'frozen')
-RETURNING id, creator_id, name, description, type, state, unlock_at, invite_expires_at, frozen_at, unlocked_at, viewable_until, streak_current, streak_perfect, last_contribution_at, freeze_warning_sent, created_at
+RETURNING id, creator_id, name, description, type, state, unlock_at, invite_expires_at, frozen_at, unlocked_at, viewable_until, streak_current, streak_perfect, last_contribution_at, freeze_warning_sent, created_at, unlock_reminder_sent_at
 `
 
 type UnlockCapsuleParams struct {
@@ -1561,6 +1640,7 @@ func (q *Queries) UnlockCapsule(ctx context.Context, arg UnlockCapsuleParams) (C
 		&i.LastContributionAt,
 		&i.FreezeWarningSent,
 		&i.CreatedAt,
+		&i.UnlockReminderSentAt,
 	)
 	return i, err
 }

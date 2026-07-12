@@ -24,6 +24,7 @@ type Handler struct {
 }
 
 func (h *Handler) Mount(r chi.Router) {
+	r.Get("/memories/{id}/reactions", h.listReactions)
 	r.Put("/memories/{id}/reactions", h.putReaction)
 	r.Delete("/memories/{id}/reactions", h.deleteReaction)
 	r.Get("/memories/{id}/comments", h.listComments)
@@ -36,6 +37,51 @@ type commentDTO struct {
 	Author    users.ProfileCard `json:"author"`
 	Body      string            `json:"body"`
 	CreatedAt time.Time         `json:"created_at"`
+}
+
+type reactionItemDTO struct {
+	User      users.ProfileCard `json:"user"`
+	Emoji     string            `json:"emoji"`
+	CreatedAt time.Time         `json:"created_at"`
+}
+
+// GET /v1/memories/{id}/reactions — every reaction with its author, plus the
+// caller's own emoji so the client can highlight/toggle it.
+func (h *Handler) listReactions(w http.ResponseWriter, r *http.Request) {
+	userID, _ := httpx.UserID(r.Context())
+	mem, ok := h.loadAccessibleMemory(w, r, userID)
+	if !ok {
+		return
+	}
+
+	rows, err := h.Q.ListReactions(r.Context(), mem.ID)
+	if err != nil {
+		httpx.InternalError(w, err)
+		return
+	}
+
+	items := make([]reactionItemDTO, 0, len(rows))
+	var myEmoji *string
+	for _, row := range rows {
+		if pg.UUIDValue(row.UserID) == userID {
+			emoji := row.Emoji
+			myEmoji = &emoji
+		}
+		items = append(items, reactionItemDTO{
+			User: users.ProfileCard{
+				ID:          pg.UUIDValue(row.UserID).String(),
+				Username:    row.Username,
+				DisplayName: row.DisplayName,
+			},
+			Emoji:     row.Emoji,
+			CreatedAt: pg.TimeValue(row.CreatedAt),
+		})
+	}
+
+	httpx.JSON(w, http.StatusOK, map[string]any{
+		"reactions": items,
+		"my_emoji":  myEmoji,
+	})
 }
 
 func (h *Handler) putReaction(w http.ResponseWriter, r *http.Request) {
@@ -68,12 +114,13 @@ func (h *Handler) putReaction(w http.ResponseWriter, r *http.Request) {
 
 	authorID := pg.UUIDValue(mem.AuthorID)
 	if authorID != userID && h.Notify != nil {
-		h.Notify.ReactionOnMemory(r.Context(), authorID, userID, pg.UUIDValue(mem.ID))
+		h.Notify.ReactionOnMemory(r.Context(), authorID, userID, pg.UUIDValue(mem.ID), req.Emoji)
 	}
 
 	httpx.JSON(w, http.StatusOK, map[string]any{
 		"emoji":      reaction.Emoji,
 		"created_at": pg.TimeValue(reaction.CreatedAt),
+		"my_emoji":   reaction.Emoji,
 	})
 }
 

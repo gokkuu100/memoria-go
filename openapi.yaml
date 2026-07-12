@@ -671,6 +671,10 @@ paths:
       security: [{ bearerAuth: [] }]
       parameters:
         - $ref: '#/components/parameters/id'
+        - name: Idempotency-Key
+          in: header
+          schema: { type: string, format: uuid }
+          description: Client queue id for safe offline sync retries
       requestBody:
         content:
           application/json:
@@ -680,8 +684,10 @@ paths:
               properties:
                 media_id: { type: string, format: uuid }
                 caption: { type: string, maxLength: 500 }
+                captured_at: { type: string, format: date-time }
       responses:
         '201': { description: Memory contributed }
+        '200': { description: Idempotent replay of prior contribution }
   /v1/capsules/{id}/unfreeze-vote:
     post:
       tags: [capsules]
@@ -724,6 +730,14 @@ paths:
       responses:
         '200': { description: Left }
   /v1/memories/{id}/reactions:
+    get:
+      tags: [social]
+      security: [{ bearerAuth: [] }]
+      summary: List reactions with authors plus the caller's own emoji
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200': { description: 'Reactions list: { reactions: [{ user, emoji, created_at }], my_emoji }' }
     put:
       tags: [social]
       security: [{ bearerAuth: [] }]
@@ -836,6 +850,14 @@ paths:
         - $ref: '#/components/parameters/id'
       responses:
         '200': { description: Marked read }
+  /v1/notifications/{id}:
+    delete:
+      tags: [notifications]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '204': { description: Notification deleted }
   /v1/notifications/flush:
     post:
       tags: [notifications]
