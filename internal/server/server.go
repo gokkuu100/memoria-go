@@ -23,6 +23,7 @@ import (
 	"memoria-backend/internal/exports"
 	"memoria-backend/internal/friends"
 	"memoria-backend/internal/httpx"
+	"memoria-backend/internal/invitelink"
 	"memoria-backend/internal/mailer"
 	"memoria-backend/internal/media"
 	"memoria-backend/internal/notifications"
@@ -144,7 +145,7 @@ func (s *Server) Router() http.Handler {
 				"details": []map[string]any{
 					{
 						"appID": "WCY5X45K3C.com.pilar.memoria.app",
-						"paths": []string{"*"},
+						"paths": []string{"/user/*"},
 					},
 				},
 			},
@@ -166,6 +167,9 @@ func (s *Server) Router() http.Handler {
 			},
 		})
 	})
+
+	// Public invite landing for Universal / App Links (HTTPS share URLs).
+	invitelink.Mount(r)
 
 	// Liveness: process is up.
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {

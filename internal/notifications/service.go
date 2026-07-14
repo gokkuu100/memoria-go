@@ -182,6 +182,7 @@ func (s *OutboxService) ReactionOnMemory(ctx context.Context, toUserID, fromUser
 		"from_user_id": fromUserID.String(),
 		"emoji":        emoji,
 	}
+	
 	if err := s.Enqueue(ctx, toUserID, CategoryReactionsComments, title, body, data, nil); err != nil {
 		slog.ErrorContext(ctx, "notifications: enqueue reaction", "error", err)
 		return
@@ -215,7 +216,7 @@ func (s *OutboxService) CapsuleInviteExpired(ctx context.Context, toUserID, caps
 
 func (s *OutboxService) CapsuleActivated(ctx context.Context, toUserID, capsuleID uuid.UUID, capsuleName string) {
 	title := "Capsule is live"
-	body := "\"" + capsuleName + "\" is now active — start contributing!"
+	body := "\"" + capsuleName + "\" is now active — start contributing! 💃"
 	data := map[string]any{
 		"type":       "capsule_activated",
 		"capsule_id": capsuleID.String(),
@@ -273,8 +274,8 @@ func (s *OutboxService) CapsuleUnlocked(ctx context.Context, toUserID, capsuleID
 }
 
 func (s *OutboxService) CapsuleUnlockSoon(ctx context.Context, toUserID, capsuleID uuid.UUID, capsuleName string, deliverAfter time.Time) {
-	title := capsuleName + " unlocks in 10 minutes 🔓"
-	body := "Get ready, your sealed memories are about to be revealed!"
+	title := capsuleName + " unlocks in 10 minutes"
+	body := "Get ready, your sealed memories are about to be revealed! 😎"
 	data := map[string]any{
 		"type":         "capsule_unlock_soon",
 		"capsule_id":   capsuleID.String(),

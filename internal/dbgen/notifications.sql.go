@@ -19,8 +19,10 @@ WHERE user_id = $1
   AND category = 'capsule_unlock'
   AND sent_at IS NULL
   AND deliver_after > now()
+  AND data->>'type' = 'capsule_unlocked'
 `
 
+// Only pull forward the actual unlock alert; leave unlock_soon reminders on schedule.
 func (q *Queries) AdvanceUnlockNotificationsForUser(ctx context.Context, userID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, advanceUnlockNotificationsForUser, userID)
 	return err

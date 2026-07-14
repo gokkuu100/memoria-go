@@ -663,3 +663,49 @@ func TestSendTestPushEndpoint(t *testing.T) {
 		t.Fatalf("expo push calls = %d, want >= 1", mock.pushCount())
 	}
 }
+
+func TestAdvanceUnlockNotificationsSkipsUnlockSoonReminder(t *testing.T) {
+	e := getEnv(t)
+	mock := resetMock(t, e)
+
+	userID := seedTestUser(t, e, uniq("unlocksoon_"))
+	token, err := auth.SignAccess([]byte("test-secret"), userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registerPushToken(t, e, token, "ExponentPushToken[unlock-soon-test]")
+
+	future := time.Now().UTC().Add(48 * time.Hour)
+
+	if err := e.outbox.EnqueueAt(context.Background(), userID, notifications.CategoryCapsuleUnlock,
+		"Weekly Recap unlocks in 10 minutes 🔓",
+		"Get ready, your sealed memories are about to be revealed! 😎",
+		map[string]any{"type": "capsule_unlock_soon", "capsule_id": uuid.New().String()},
+		nil, future); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := e.q.AdvanceUnlockNotificationsForUser(context.Background(), pg.UUID(userID)); err != nil {
+		t.Fatal(err)
+	}
+	e.outbox.FlushInstant(context.Background())
+	if mock.pushCount() != 0 {
+		t.Fatalf("unlock_soon flushed early: push calls = %d, want 0", mock.pushCount())
+	}
+
+	if err := e.outbox.EnqueueAt(context.Background(), userID, notifications.CategoryCapsuleUnlock,
+		"Capsule unlocked!",
+		"\"Weekly Recap\" is ready to open ✨",
+		map[string]any{"type": "capsule_unlocked", "capsule_id": uuid.New().String()},
+		nil, future); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := e.q.AdvanceUnlockNotificationsForUser(context.Background(), pg.UUID(userID)); err != nil {
+		t.Fatal(err)
+	}
+	e.outbox.FlushInstant(context.Background())
+	if mock.pushCount() != 1 {
+		t.Fatalf("capsule_unlocked not advanced: push calls = %d, want 1", mock.pushCount())
+	}
+}

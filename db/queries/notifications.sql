@@ -62,12 +62,14 @@ WHERE id = $1
   AND read_at IS NULL;
 
 -- name: AdvanceUnlockNotificationsForUser :exec
+-- Only pull forward the actual unlock alert; leave unlock_soon reminders on schedule.
 UPDATE notification_outbox
 SET deliver_after = now()
 WHERE user_id = $1
   AND category = 'capsule_unlock'
   AND sent_at IS NULL
-  AND deliver_after > now();
+  AND deliver_after > now()
+  AND data->>'type' = 'capsule_unlocked';
 
 -- name: MarkAllNotificationsRead :exec
 UPDATE notification_outbox
