@@ -334,9 +334,9 @@ func TestPresignRejectsOversizeAndDuration(t *testing.T) {
 		t.Fatalf("oversize presign: status %d code %q, want 413 media_too_large", status, pre.Error.Code)
 	}
 
-	// Spark caps video at 10s; 15s must be rejected.
+	// Spark caps boomerang video at 3s; 4s must be rejected.
 	pre, status = presign(t, e, token, map[string]any{
-		"kind": "video", "content_type": "video/mp4", "byte_size": 1 << 20, "duration_ms": 15000,
+		"kind": "video", "content_type": "video/mp4", "byte_size": 1 << 20, "duration_ms": 4000,
 	})
 	if status != http.StatusUnprocessableEntity || pre.Error.Code != "duration_exceeds_plan" {
 		t.Fatalf("over-duration presign: status %d code %q, want 422 duration_exceeds_plan", status, pre.Error.Code)
