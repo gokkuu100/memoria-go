@@ -8,11 +8,14 @@ services:
       ENV: production
       S3_ENDPOINT: http://minio:9000
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-https://memoriago.duckdns.org:9000}
+    restart: unless-stopped
 
   postgres:
     ports: !override []
+    restart: unless-stopped
 
   minio:
     ports: !override
       - "127.0.0.1:19000:9000"
       - "127.0.0.1:9001:9001"
+    restart: unless-stopped
