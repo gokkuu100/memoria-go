@@ -23,6 +23,8 @@ tags:
   - name: exports
   - name: widget
   - name: webhooks
+  - name: analytics
+  - name: metrics
 components:
   securitySchemes:
     bearerAuth:
@@ -713,6 +715,20 @@ paths:
         - $ref: '#/components/parameters/id'
       responses:
         '200': { description: Unlock stats }
+  /v1/capsules/{id}/recap:
+    get:
+      tags: [capsules]
+      security: [{ bearerAuth: [] }]
+      summary: Narrative facts for the unlock Recap story (no media URLs)
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200':
+          description: >
+            Recap facts — totals, days_sealed, top_contributor, peak_hour_local,
+            night_owl_share, first/last capture, streak, was_frozen, busiest_day,
+            viewer (per-member stats), facts (keyed analytics for story composition)
+        '403': { description: Capsule not unlocked or view blocked }
   /v1/capsules/{id}/unlock-reveal/seen:
     post:
       tags: [capsules]
@@ -894,3 +910,45 @@ paths:
       security: [{ bearerAuth: [] }]
       responses:
         '200': { description: Widget-eligible items (album/capsule items, media thumb URLs, optional caption/comment text) }
+  /v1/analytics/events:
+    post:
+      tags: [analytics]
+      security: [{ bearerAuth: [] }]
+      summary: Batch-ingest client analytics events (async, fire-and-forget)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [events]
+              properties:
+                events:
+                  type: array
+                  maxItems: 50
+                  items:
+                    type: object
+                    required: [name]
+                    properties:
+                      name: { type: string }
+                      occurred_at: { type: string, format: date-time }
+                      properties:
+                        type: object
+                        additionalProperties: true
+      responses:
+        '202': { description: Accepted count }
+  /v1/metrics/summary:
+    get:
+      tags: [metrics]
+      summary: Founder dashboard — 15 product metrics (X-Metrics-Key)
+      parameters:
+        - name: days
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 365, default: 90 }
+        - name: X-Metrics-Key
+          in: header
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Metrics summary JSON }
+        '401': { description: Invalid metrics key }

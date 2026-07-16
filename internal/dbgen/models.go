@@ -30,6 +30,16 @@ type AlbumMember struct {
 	LeftAt       pgtype.Timestamptz
 }
 
+type AnalyticsEvent struct {
+	ID         pgtype.UUID
+	UserID     pgtype.UUID
+	EventName  string
+	Properties json.RawMessage
+	OccurredAt pgtype.Timestamptz
+	Source     string
+	CreatedAt  pgtype.Timestamptz
+}
+
 type Block struct {
 	BlockerID pgtype.UUID
 	BlockedID pgtype.UUID

@@ -18,6 +18,7 @@ import (
 
 	"memoria-backend/db"
 	"memoria-backend/internal/albums"
+	"memoria-backend/internal/analytics"
 	"memoria-backend/internal/capsules"
 	"memoria-backend/internal/config"
 	"memoria-backend/internal/dbgen"
@@ -93,6 +94,10 @@ func run() error {
 	outbox := notifications.NewOutboxService(pool, q, expo)
 	outbox.Start(ctx)
 	defer outbox.Stop()
+
+	tracker := analytics.NewTracker(ctx, pool)
+	analytics.SetDefault(tracker)
+	defer tracker.Stop()
 
 	exportWorker := &exports.Worker{
 		Pool: pool, Q: q, Store: store,
@@ -218,6 +223,11 @@ func run() error {
 			Notify:       outbox,
 			Notif:        &notifications.Handler{Q: q, Flusher: outbox},
 			ExportWorker: exportWorker,
+			Analytics: &analytics.Handler{
+				Pool:       pool,
+				Tracker:    tracker,
+				MetricsKey: cfg.MetricsKey,
+			},
 		}).Router(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

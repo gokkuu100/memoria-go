@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
+	"memoria-backend/internal/analytics"
 	"memoria-backend/internal/config"
 	"memoria-backend/internal/dbgen"
 	"memoria-backend/internal/httpx"
@@ -295,6 +296,9 @@ func (h *Handler) signup(w http.ResponseWriter, r *http.Request) {
 		httpx.InternalError(w, err)
 		return
 	}
+	analytics.TrackUser(pg.UUIDValue(user.ID), analytics.EventSignupComplete, map[string]any{
+		"plan": user.Plan,
+	})
 	httpx.JSON(w, http.StatusCreated, map[string]any{"user": users.ToDTO(user), "tokens": tokens})
 }
 

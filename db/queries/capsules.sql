@@ -353,6 +353,186 @@ GROUP BY m.id
 ORDER BY reaction_count DESC
 LIMIT 1;
 
+-- name: GetCapsuleRecapCaptureSpan :one
+SELECT
+    MIN(COALESCE(m.captured_at, m.created_at))::timestamptz AS first_captured_at,
+    MAX(COALESCE(m.captured_at, m.created_at))::timestamptz AS last_captured_at,
+    COUNT(DISTINCT m.author_id)::bigint AS contributor_count
+FROM memories m
+WHERE m.container_type = 'capsule'
+  AND m.container_id = $1
+  AND m.deleted_at IS NULL;
+
+-- name: GetCapsuleRecapPeakHour :one
+-- Hour-of-day (0-23) in the viewer's IANA timezone with the most captures.
+SELECT
+    EXTRACT(HOUR FROM (COALESCE(m.captured_at, m.created_at) AT TIME ZONE sqlc.arg('tz')::text))::int AS peak_hour,
+    COUNT(*)::bigint AS capture_count
+FROM memories m
+WHERE m.container_type = 'capsule'
+  AND m.container_id = $1
+  AND m.deleted_at IS NULL
+GROUP BY peak_hour
+ORDER BY capture_count DESC, peak_hour ASC
+LIMIT 1;
+
+-- name: GetCapsuleRecapNightOwlShare :one
+-- Fraction of captures between 22:00 and 04:59 inclusive in viewer timezone.
+SELECT (
+    CASE
+        WHEN COUNT(*) = 0 THEN 0::float8
+        ELSE (
+            COUNT(*) FILTER (
+                WHERE EXTRACT(HOUR FROM (COALESCE(m.captured_at, m.created_at) AT TIME ZONE sqlc.arg('tz')::text)) >= 22
+                   OR EXTRACT(HOUR FROM (COALESCE(m.captured_at, m.created_at) AT TIME ZONE sqlc.arg('tz')::text)) < 5
+            )::float8 / COUNT(*)::float8
+        )
+    END
+)::float8 AS night_owl_share
+FROM memories m
+WHERE m.container_type = 'capsule'
+  AND m.container_id = $1
+  AND m.deleted_at IS NULL;
+
+-- name: GetCapsuleRecapBusiestDay :one
+SELECT
+    (COALESCE(m.captured_at, m.created_at) AT TIME ZONE sqlc.arg('tz')::text)::date AS busiest_day,
+    COUNT(*)::bigint AS capture_count
+FROM memories m
+WHERE m.container_type = 'capsule'
+  AND m.container_id = $1
+  AND m.deleted_at IS NULL
+GROUP BY busiest_day
+ORDER BY capture_count DESC, busiest_day ASC
+LIMIT 1;
+
+-- name: GetCapsuleRecapViewerContribution :one
+-- Memories captured by the viewing member (author_id = viewer).
+SELECT
+    COUNT(*)::bigint AS memories_taken,
+    COUNT(*) FILTER (WHERE med.kind = 'photo')::bigint AS photos_taken,
+    COUNT(*) FILTER (WHERE med.kind = 'video')::bigint AS videos_taken,
+    COUNT(*) FILTER (WHERE m.voice_media_id IS NOT NULL)::bigint AS voice_notes_taken
+FROM memories m
+JOIN media med ON med.id = m.media_id
+WHERE m.container_type = 'capsule'
+  AND m.container_id = $1
+  AND m.author_id = $2
+  AND m.deleted_at IS NULL;
+
+-- name: GetCapsuleRecapViewerPeakHour :one
+SELECT
+    EXTRACT(HOUR FROM (COALESCE(m.captured_at, m.created_at) AT TIME ZONE sqlc.arg('tz')::text))::int AS peak_hour,
+    COUNT(*)::bigint AS capture_count
+FROM memories m
+WHERE m.container_type = 'capsule'
+  AND m.container_id = $1
+  AND m.author_id = $2
+  AND m.deleted_at IS NULL
+GROUP BY peak_hour
+ORDER BY capture_count DESC, peak_hour ASC
+LIMIT 1;
+
+-- name: GetCapsuleRecapViewerNightOwlShare :one
+SELECT (
+    CASE
+        WHEN COUNT(*) = 0 THEN 0::float8
+        ELSE (
+            COUNT(*) FILTER (
+                WHERE EXTRACT(HOUR FROM (COALESCE(m.captured_at, m.created_at) AT TIME ZONE sqlc.arg('tz')::text)) >= 22
+                   OR EXTRACT(HOUR FROM (COALESCE(m.captured_at, m.created_at) AT TIME ZONE sqlc.arg('tz')::text)) < 5
+            )::float8 / COUNT(*)::float8
+        )
+    END
+)::float8 AS night_owl_share
+FROM memories m
+WHERE m.container_type = 'capsule'
+  AND m.container_id = $1
+  AND m.author_id = $2
+  AND m.deleted_at IS NULL;
+
+-- name: GetCapsuleRecapViewerRank :one
+WITH counts AS (
+    SELECT author_id, COUNT(*)::bigint AS memory_count
+    FROM memories
+    WHERE container_type = 'capsule'
+      AND container_id = $1
+      AND deleted_at IS NULL
+    GROUP BY author_id
+),
+ranked AS (
+    SELECT
+        author_id,
+        memory_count,
+        RANK() OVER (ORDER BY memory_count DESC, author_id) AS rank,
+        COUNT(*) OVER ()::bigint AS contributor_count
+    FROM counts
+)
+SELECT rank, memory_count, contributor_count
+FROM ranked
+WHERE author_id = $2;
+
+-- name: GetCapsuleRecapSecondContributor :one
+SELECT m.author_id, u.username, u.display_name, COUNT(*)::bigint AS memory_count
+FROM memories m
+JOIN users u ON u.id = m.author_id
+WHERE m.container_type = 'capsule'
+  AND m.container_id = $1
+  AND m.deleted_at IS NULL
+GROUP BY m.author_id, u.username, u.display_name
+ORDER BY memory_count DESC, m.author_id
+OFFSET 1
+LIMIT 1;
+
+-- name: GetCapsuleRecapMinContributor :one
+SELECT m.author_id, u.username, u.display_name, COUNT(*)::bigint AS memory_count
+FROM memories m
+JOIN users u ON u.id = m.author_id
+WHERE m.container_type = 'capsule'
+  AND m.container_id = $1
+  AND m.deleted_at IS NULL
+GROUP BY m.author_id, u.username, u.display_name
+HAVING COUNT(*) >= 1
+ORDER BY memory_count ASC, m.author_id
+LIMIT 1;
+
+-- name: GetCapsuleRecapViewerEngagement :one
+SELECT
+    (
+        SELECT COUNT(*)::bigint
+        FROM reactions r
+        JOIN memories m ON m.id = r.memory_id
+        WHERE m.container_type = 'capsule'
+          AND m.container_id = $1
+          AND m.author_id <> $2
+          AND r.user_id = $2
+    ) AS reactions_on_others,
+    (
+        SELECT COUNT(*)::bigint
+        FROM comments c
+        JOIN memories m ON m.id = c.memory_id
+        WHERE m.container_type = 'capsule'
+          AND m.container_id = $1
+          AND m.author_id <> $2
+          AND c.author_id = $2
+    ) AS comments_on_others;
+
+-- name: GetCapsuleRecapMostReactedDetail :one
+SELECT
+    m.id,
+    m.author_id,
+    u.display_name,
+    COUNT(r.*)::bigint AS reaction_count
+FROM memories m
+JOIN users u ON u.id = m.author_id
+LEFT JOIN reactions r ON r.memory_id = m.id
+WHERE m.container_type = 'capsule'
+  AND m.container_id = $1
+  AND m.deleted_at IS NULL
+GROUP BY m.id, m.author_id, u.display_name
+ORDER BY reaction_count DESC, m.id
+LIMIT 1;
+
 -- name: ListTimelineCapsuleSealedMarkers :many
 SELECT c.id AS capsule_id, c.name AS capsule_name, sd.day AS contribution_day
 FROM streak_days sd

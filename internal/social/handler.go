@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"memoria-backend/internal/analytics"
 	"memoria-backend/internal/dbgen"
 	"memoria-backend/internal/httpx"
 	"memoria-backend/internal/notifications"
@@ -117,6 +118,9 @@ func (h *Handler) putReaction(w http.ResponseWriter, r *http.Request) {
 		h.Notify.ReactionOnMemory(r.Context(), authorID, userID, pg.UUIDValue(mem.ID), req.Emoji)
 	}
 
+	analytics.TrackUser(userID, analytics.EventMemoryReacted, map[string]any{
+		"source": mem.ContainerType,
+	})
 	httpx.JSON(w, http.StatusOK, map[string]any{
 		"emoji":      reaction.Emoji,
 		"created_at": pg.TimeValue(reaction.CreatedAt),
@@ -258,6 +262,9 @@ func (h *Handler) createComment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	author, _ := h.Q.GetUserByID(r.Context(), pg.UUID(userID))
+	analytics.TrackUser(userID, analytics.EventMemoryCommented, map[string]any{
+		"source": mem.ContainerType,
+	})
 	httpx.JSON(w, http.StatusCreated, commentDTO{
 		ID:        pg.UUIDValue(c.ID).String(),
 		Author:    users.ToProfileCard(author),

@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"memoria-backend/internal/albums"
+	"memoria-backend/internal/analytics"
 	"memoria-backend/internal/auth"
 	"memoria-backend/internal/billing"
 	"memoria-backend/internal/capsules"
@@ -48,8 +49,9 @@ type Server struct {
 	notif   *notifications.Handler
 	billing *billing.Handler
 	stats   *stats.Handler
-	exports *exports.Handler
-	widget  *widget.Handler
+	exports   *exports.Handler
+	widget    *widget.Handler
+	analytics *analytics.Handler
 }
 
 // Deps holds optional feature wiring. Nil Notify falls back to LogSender.
@@ -57,6 +59,7 @@ type Deps struct {
 	Notify       notifications.Sender
 	Notif        *notifications.Handler
 	ExportWorker *exports.Worker
+	Analytics    *analytics.Handler
 }
 
 func New(pool *pgxpool.Pool, cfg *config.Config, m mailer.Mailer, store *media.Store, deps *Deps) *Server {
@@ -111,6 +114,9 @@ func New(pool *pgxpool.Pool, cfg *config.Config, m mailer.Mailer, store *media.S
 				ew.ProcessJobAsync(jobID)
 			},
 		}
+	}
+	if deps != nil && deps.Analytics != nil {
+		srv.analytics = deps.Analytics
 	}
 	return srv
 }
@@ -191,6 +197,9 @@ func (s *Server) Router() http.Handler {
 	r.Route("/v1", func(v1 chi.Router) {
 		s.auth.Mount(v1)
 		s.billing.MountWebhook(v1)
+		if s.analytics != nil {
+			s.analytics.MountPublic(v1)
+		}
 
 		// Authenticated routes.
 		v1.Group(func(p chi.Router) {
@@ -210,6 +219,9 @@ func (s *Server) Router() http.Handler {
 			s.albums.Mount(p)
 			s.capsules.Mount(p)
 			s.social.Mount(p)
+			if s.analytics != nil {
+				s.analytics.MountAuthed(p)
+			}
 			if s.notif != nil {
 				s.notif.Mount(p)
 			}

@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"memoria-backend/internal/analytics"
 	"memoria-backend/internal/billing"
 	"memoria-backend/internal/dbgen"
 	"memoria-backend/internal/friends"
@@ -46,6 +47,7 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Post("/capsules/{id}/unfreeze-vote", h.unfreezeVote)
 	r.Post("/capsules/{id}/unblock/{userId}", h.unblockMember)
 	r.Get("/capsules/{id}/stats", h.stats)
+	r.Get("/capsules/{id}/recap", h.recap)
 	r.Post("/capsules/{id}/unlock-reveal/seen", h.markUnlockRevealSeen)
 	r.Post("/capsules/{id}/leave", h.leave)
 	r.Delete("/capsules/{id}", h.deleteCapsule)
@@ -281,6 +283,17 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	if cap.State == StateActive {
 		ScheduleUnlockReminder(r.Context(), h.Q, h.Notify, cap)
 	}
+	capID := pg.UUIDValue(cap.ID)
+	analytics.TrackUser(userID, analytics.EventCapsuleCreated, map[string]any{
+		"capsule_id":   capID.String(),
+		"capsule_type": cap.Type,
+	})
+	for range inviteeIDs {
+		analytics.TrackUser(userID, analytics.EventCapsuleInviteSent, map[string]any{
+			"capsule_id":   capID.String(),
+			"capsule_type": cap.Type,
+		})
+	}
 	httpx.JSON(w, http.StatusCreated, resp)
 }
 
@@ -335,6 +348,10 @@ func (h *Handler) accept(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	analytics.TrackUser(userID, analytics.EventCapsuleInviteAccepted, map[string]any{
+		"capsule_id":   capID.String(),
+		"capsule_type": cap.Type,
+	})
 	httpx.JSON(w, http.StatusOK, map[string]string{"status": "accepted"})
 }
 
@@ -467,7 +484,11 @@ func (h *Handler) inviteMember(w http.ResponseWriter, r *http.Request) {
 		if h.Notify != nil {
 			h.Notify.CapsuleInviteReceived(r.Context(), inviteeID, userID, capID, cap.Name)
 		}
-		httpx.JSON(w, http.StatusCreated, map[string]string{"status": "invited"})
+		analytics.TrackUser(userID, analytics.EventCapsuleInviteSent, map[string]any{
+			"capsule_id":   capID.String(),
+			"capsule_type": cap.Type,
+		})
+		httpx.JSON(w, http.StatusOK, map[string]string{"status": "reinvited"})
 		return
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		httpx.InternalError(w, err)
@@ -483,6 +504,10 @@ func (h *Handler) inviteMember(w http.ResponseWriter, r *http.Request) {
 	if h.Notify != nil {
 		h.Notify.CapsuleInviteReceived(r.Context(), inviteeID, userID, capID, cap.Name)
 	}
+	analytics.TrackUser(userID, analytics.EventCapsuleInviteSent, map[string]any{
+		"capsule_id":   capID.String(),
+		"capsule_type": cap.Type,
+	})
 	httpx.JSON(w, http.StatusCreated, map[string]string{"status": "invited"})
 }
 
@@ -814,6 +839,10 @@ func (h *Handler) addMemory(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	analytics.TrackUser(userID, analytics.EventCapsuleMemoryCreated, map[string]any{
+		"capsule_id":   capID.String(),
+		"capsule_type": cap.Type,
+	})
 	h.writeMemoryCreated(w, mem, http.StatusCreated)
 }
 
@@ -1065,6 +1094,267 @@ func (h *Handler) stats(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, resp)
 }
 
+// GET /v1/capsules/{id}/recap — narrative facts for the unlock Recap story.
+// Same sealing guards as stats; no media URLs or captions.
+func (h *Handler) recap(w http.ResponseWriter, r *http.Request) {
+	userID, _ := httpx.UserID(r.Context())
+	capID, ok := h.parseCapsuleID(w, r)
+	if !ok {
+		return
+	}
+	cap, member, ok := h.loadCapsuleMember(w, r, capID, userID)
+	if !ok {
+		return
+	}
+	if (cap.State != StateUnlocked && cap.State != StateArchived) || !CanViewMemories(cap, member, time.Now().UTC()) {
+		httpx.Error(w, http.StatusForbidden, httpx.CodeForbidden, "recap available after unlock")
+		return
+	}
+
+	viewer, err := h.Q.GetUserByID(r.Context(), pg.UUID(userID))
+	if err != nil {
+		httpx.InternalError(w, err)
+		return
+	}
+	tz := viewer.Timezone
+	if tz == "" {
+		tz = "UTC"
+	}
+
+	totals, err := h.Q.GetCapsuleUnlockStats(r.Context(), pg.UUID(capID))
+	if err != nil {
+		httpx.InternalError(w, err)
+		return
+	}
+
+	memberCount, err := h.Q.CountAcceptedCapsuleMembers(r.Context(), pg.UUID(capID))
+	if err != nil {
+		httpx.InternalError(w, err)
+		return
+	}
+
+	created := pg.TimeValue(cap.CreatedAt)
+	unlockAnchor := pg.TimeValue(cap.UnlockAt)
+	if cap.UnlockedAt.Valid {
+		unlockAnchor = pg.TimeValue(cap.UnlockedAt)
+	}
+	daysSealed := int64(0)
+	if !unlockAnchor.IsZero() && !created.IsZero() && unlockAnchor.After(created) {
+		daysSealed = int64(unlockAnchor.Sub(created).Hours() / 24)
+		if daysSealed < 1 {
+			daysSealed = 1
+		}
+	}
+
+	resp := map[string]any{
+		"capsule_id":      capID.String(),
+		"capsule_name":    cap.Name,
+		"capsule_type":    cap.Type,
+		"total_memories":  totals.TotalMemories,
+		"photos":          totals.PhotoCount,
+		"videos":          totals.VideoCount,
+		"voice_notes":     totals.VoiceCount,
+		"member_count":    memberCount,
+		"days_sealed":     daysSealed,
+		"streak_current":  cap.StreakCurrent,
+		"streak_perfect":  cap.StreakPerfect,
+		"was_frozen":      cap.FrozenAt.Valid,
+		"created_at":      created.UTC().Format(time.RFC3339),
+		"unlock_at":       pg.TimeValue(cap.UnlockAt).UTC().Format(time.RFC3339),
+		"timezone":        tz,
+	}
+	if cap.UnlockedAt.Valid {
+		resp["unlocked_at"] = pg.TimeValue(cap.UnlockedAt).UTC().Format(time.RFC3339)
+	}
+
+	if span, err := h.Q.GetCapsuleRecapCaptureSpan(r.Context(), pg.UUID(capID)); err == nil {
+		resp["contributor_count"] = span.ContributorCount
+		if span.FirstCapturedAt.Valid {
+			resp["first_captured_at"] = span.FirstCapturedAt.Time.UTC().Format(time.RFC3339)
+		}
+		if span.LastCapturedAt.Valid {
+			resp["last_captured_at"] = span.LastCapturedAt.Time.UTC().Format(time.RFC3339)
+		}
+	} else {
+		resp["contributor_count"] = int64(0)
+	}
+
+	if top, err := h.Q.GetTopCapsuleContributor(r.Context(), pg.UUID(capID)); err == nil && totals.TotalMemories > 0 {
+		share := float64(top.MemoryCount) / float64(totals.TotalMemories)
+		resp["top_contributor"] = map[string]any{
+			"id":           pg.UUIDValue(top.AuthorID).String(),
+			"username":     top.Username,
+			"display_name": top.DisplayName,
+			"memory_count": top.MemoryCount,
+			"share_pct":    share,
+		}
+	}
+
+	if peak, err := h.Q.GetCapsuleRecapPeakHour(r.Context(), dbgen.GetCapsuleRecapPeakHourParams{
+		ContainerID: pg.UUID(capID),
+		Tz:          tz,
+	}); err == nil {
+		resp["peak_hour_local"] = peak.PeakHour
+	}
+
+	if night, err := h.Q.GetCapsuleRecapNightOwlShare(r.Context(), dbgen.GetCapsuleRecapNightOwlShareParams{
+		ContainerID: pg.UUID(capID),
+		Tz:          tz,
+	}); err == nil {
+		resp["night_owl_share"] = night
+	}
+
+	if busy, err := h.Q.GetCapsuleRecapBusiestDay(r.Context(), dbgen.GetCapsuleRecapBusiestDayParams{
+		ContainerID: pg.UUID(capID),
+		Tz:          tz,
+	}); err == nil && busy.BusiestDay.Valid {
+		resp["busiest_day"] = busy.BusiestDay.Time.Format("2006-01-02")
+		resp["busiest_day_count"] = busy.CaptureCount
+	}
+
+	if most, err := h.Q.GetCapsuleRecapMostReactedDetail(r.Context(), pg.UUID(capID)); err == nil && most.ReactionCount > 0 {
+		resp["most_reacted_memory_id"] = pg.UUIDValue(most.ID).String()
+		resp["most_reacted_count"] = most.ReactionCount
+		resp["most_reacted_author_id"] = pg.UUIDValue(most.AuthorID).String()
+		resp["most_reacted_author_name"] = most.DisplayName
+	}
+
+	capUUID := pg.UUID(capID)
+	userUUID := pg.UUID(userID)
+
+	viewerBlock := map[string]any{}
+	facts := map[string]any{
+		"capsule_id":       capID.String(),
+		"capsule_name":     cap.Name,
+		"capsule_type":     cap.Type,
+		"member_count":     memberCount,
+		"contributor_count": resp["contributor_count"],
+		"days_sealed":      daysSealed,
+		"memories_total":   totals.TotalMemories,
+		"photos_total":     totals.PhotoCount,
+		"videos_total":     totals.VideoCount,
+		"voice_notes_total": totals.VoiceCount,
+		"streak_current":   cap.StreakCurrent,
+		"streak_perfect":   cap.StreakPerfect,
+		"was_frozen":       cap.FrozenAt.Valid,
+	}
+
+	if vc, err := h.Q.GetCapsuleRecapViewerContribution(r.Context(), dbgen.GetCapsuleRecapViewerContributionParams{
+		ContainerID: capUUID,
+		AuthorID:    userUUID,
+	}); err == nil {
+		others := totals.TotalMemories - vc.MemoriesTaken
+		if others < 0 {
+			others = 0
+		}
+		var share float64
+		if totals.TotalMemories > 0 {
+			share = float64(vc.MemoriesTaken) / float64(totals.TotalMemories)
+		}
+		viewerBlock["memories_taken"] = vc.MemoriesTaken
+		viewerBlock["photos_taken"] = vc.PhotosTaken
+		viewerBlock["videos_taken"] = vc.VideosTaken
+		viewerBlock["voice_notes_taken"] = vc.VoiceNotesTaken
+		viewerBlock["share_pct"] = share
+		viewerBlock["memories_waiting"] = others
+
+		facts["memories_by_viewer"] = vc.MemoriesTaken
+		facts["photos_by_viewer"] = vc.PhotosTaken
+		facts["videos_by_viewer"] = vc.VideosTaken
+		facts["voice_notes_by_viewer"] = vc.VoiceNotesTaken
+		facts["memories_by_others"] = others
+		facts["viewer_share_pct"] = share
+	}
+
+	if rank, err := h.Q.GetCapsuleRecapViewerRank(r.Context(), dbgen.GetCapsuleRecapViewerRankParams{
+		ContainerID: capUUID,
+		AuthorID:    userUUID,
+	}); err == nil {
+		viewerBlock["contributor_rank"] = rank.Rank
+		viewerBlock["is_top_contributor"] = rank.Rank == 1
+		facts["viewer_contributor_rank"] = rank.Rank
+		facts["viewer_is_top_contributor"] = rank.Rank == 1
+	} else {
+		viewerBlock["contributor_rank"] = nil
+		viewerBlock["is_top_contributor"] = false
+		facts["viewer_is_top_contributor"] = false
+	}
+
+	if vPeak, err := h.Q.GetCapsuleRecapViewerPeakHour(r.Context(), dbgen.GetCapsuleRecapViewerPeakHourParams{
+		ContainerID: capUUID,
+		AuthorID:    userUUID,
+		Tz:          tz,
+	}); err == nil && vPeak.CaptureCount > 0 {
+		viewerBlock["peak_hour_local"] = vPeak.PeakHour
+		facts["viewer_peak_hour_local"] = vPeak.PeakHour
+	}
+
+	if vNight, err := h.Q.GetCapsuleRecapViewerNightOwlShare(r.Context(), dbgen.GetCapsuleRecapViewerNightOwlShareParams{
+		ContainerID: capUUID,
+		AuthorID:    userUUID,
+		Tz:          tz,
+	}); err == nil {
+		viewerBlock["night_owl_share"] = vNight
+		facts["viewer_night_owl_share"] = vNight
+	}
+
+	if eng, err := h.Q.GetCapsuleRecapViewerEngagement(r.Context(), dbgen.GetCapsuleRecapViewerEngagementParams{
+		ContainerID: capUUID,
+		AuthorID:    userUUID,
+	}); err == nil {
+		viewerBlock["reactions_on_others"] = eng.ReactionsOnOthers
+		viewerBlock["comments_on_others"] = eng.CommentsOnOthers
+		facts["viewer_reactions_on_others"] = eng.ReactionsOnOthers
+		facts["viewer_comments_on_others"] = eng.CommentsOnOthers
+	}
+
+	if second, err := h.Q.GetCapsuleRecapSecondContributor(r.Context(), capUUID); err == nil {
+		facts["second_contributor_name"] = second.DisplayName
+		facts["second_contributor_count"] = second.MemoryCount
+	}
+
+	if minC, err := h.Q.GetCapsuleRecapMinContributor(r.Context(), capUUID); err == nil {
+		facts["min_contributor_name"] = minC.DisplayName
+		facts["min_contributor_count"] = minC.MemoryCount
+	}
+
+	if peak, ok := resp["peak_hour_local"]; ok {
+		facts["group_peak_hour_local"] = peak
+	}
+	if night, ok := resp["night_owl_share"]; ok {
+		facts["group_night_owl_share"] = night
+	}
+	if first, ok := resp["first_captured_at"]; ok {
+		facts["first_captured_at"] = first
+	}
+	if last, ok := resp["last_captured_at"]; ok {
+		facts["last_captured_at"] = last
+	}
+	if busyDay, ok := resp["busiest_day"]; ok {
+		facts["busiest_day"] = busyDay
+	}
+	if busyCount, ok := resp["busiest_day_count"]; ok {
+		facts["busiest_day_count"] = busyCount
+	}
+	if top, ok := resp["top_contributor"].(map[string]any); ok {
+		facts["top_contributor_name"] = top["display_name"]
+		facts["top_contributor_count"] = top["memory_count"]
+		facts["top_contributor_share_pct"] = top["share_pct"]
+		facts["top_contributor_is_viewer"] = top["id"] == userID.String()
+	}
+	if mostName, ok := resp["most_reacted_author_name"]; ok {
+		facts["most_reacted_author_name"] = mostName
+	}
+	if mostCount, ok := resp["most_reacted_count"]; ok {
+		facts["most_reacted_count"] = mostCount
+	}
+
+	resp["viewer"] = viewerBlock
+	resp["facts"] = facts
+
+	httpx.JSON(w, http.StatusOK, resp)
+}
+
 // POST /v1/capsules/{id}/unlock-reveal/seen
 func (h *Handler) markUnlockRevealSeen(w http.ResponseWriter, r *http.Request) {
 	userID, _ := httpx.UserID(r.Context())
@@ -1105,6 +1395,10 @@ func (h *Handler) markUnlockRevealSeen(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{
 		"status":             "ok",
 		"unlock_reveal_seen": updated.UnlockRevealSeenAt.Valid,
+	})
+	analytics.TrackUser(userID, analytics.EventUnlockRevealCompleted, map[string]any{
+		"capsule_id":   capID.String(),
+		"capsule_type": cap.Type,
 	})
 }
 

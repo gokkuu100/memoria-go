@@ -428,6 +428,404 @@ func (q *Queries) GetCapsuleMember(ctx context.Context, arg GetCapsuleMemberPara
 	return i, err
 }
 
+const getCapsuleRecapBusiestDay = `-- name: GetCapsuleRecapBusiestDay :one
+SELECT
+    (COALESCE(m.captured_at, m.created_at) AT TIME ZONE $2::text)::date AS busiest_day,
+    COUNT(*)::bigint AS capture_count
+FROM memories m
+WHERE m.container_type = 'capsule'
+  AND m.container_id = $1
+  AND m.deleted_at IS NULL
+GROUP BY busiest_day
+ORDER BY capture_count DESC, busiest_day ASC
+LIMIT 1
+`
+
+type GetCapsuleRecapBusiestDayParams struct {
+	ContainerID pgtype.UUID
+	Tz          string
+}
+
+type GetCapsuleRecapBusiestDayRow struct {
+	BusiestDay   pgtype.Date
+	CaptureCount int64
+}
+
+func (q *Queries) GetCapsuleRecapBusiestDay(ctx context.Context, arg GetCapsuleRecapBusiestDayParams) (GetCapsuleRecapBusiestDayRow, error) {
+	row := q.db.QueryRow(ctx, getCapsuleRecapBusiestDay, arg.ContainerID, arg.Tz)
+	var i GetCapsuleRecapBusiestDayRow
+	err := row.Scan(&i.BusiestDay, &i.CaptureCount)
+	return i, err
+}
+
+const getCapsuleRecapCaptureSpan = `-- name: GetCapsuleRecapCaptureSpan :one
+SELECT
+    MIN(COALESCE(m.captured_at, m.created_at))::timestamptz AS first_captured_at,
+    MAX(COALESCE(m.captured_at, m.created_at))::timestamptz AS last_captured_at,
+    COUNT(DISTINCT m.author_id)::bigint AS contributor_count
+FROM memories m
+WHERE m.container_type = 'capsule'
+  AND m.container_id = $1
+  AND m.deleted_at IS NULL
+`
+
+type GetCapsuleRecapCaptureSpanRow struct {
+	FirstCapturedAt  pgtype.Timestamptz
+	LastCapturedAt   pgtype.Timestamptz
+	ContributorCount int64
+}
+
+func (q *Queries) GetCapsuleRecapCaptureSpan(ctx context.Context, containerID pgtype.UUID) (GetCapsuleRecapCaptureSpanRow, error) {
+	row := q.db.QueryRow(ctx, getCapsuleRecapCaptureSpan, containerID)
+	var i GetCapsuleRecapCaptureSpanRow
+	err := row.Scan(&i.FirstCapturedAt, &i.LastCapturedAt, &i.ContributorCount)
+	return i, err
+}
+
+const getCapsuleRecapMinContributor = `-- name: GetCapsuleRecapMinContributor :one
+SELECT m.author_id, u.username, u.display_name, COUNT(*)::bigint AS memory_count
+FROM memories m
+JOIN users u ON u.id = m.author_id
+WHERE m.container_type = 'capsule'
+  AND m.container_id = $1
+  AND m.deleted_at IS NULL
+GROUP BY m.author_id, u.username, u.display_name
+HAVING COUNT(*) >= 1
+ORDER BY memory_count ASC, m.author_id
+LIMIT 1
+`
+
+type GetCapsuleRecapMinContributorRow struct {
+	AuthorID    pgtype.UUID
+	Username    string
+	DisplayName string
+	MemoryCount int64
+}
+
+func (q *Queries) GetCapsuleRecapMinContributor(ctx context.Context, containerID pgtype.UUID) (GetCapsuleRecapMinContributorRow, error) {
+	row := q.db.QueryRow(ctx, getCapsuleRecapMinContributor, containerID)
+	var i GetCapsuleRecapMinContributorRow
+	err := row.Scan(
+		&i.AuthorID,
+		&i.Username,
+		&i.DisplayName,
+		&i.MemoryCount,
+	)
+	return i, err
+}
+
+const getCapsuleRecapMostReactedDetail = `-- name: GetCapsuleRecapMostReactedDetail :one
+SELECT
+    m.id,
+    m.author_id,
+    u.display_name,
+    COUNT(r.*)::bigint AS reaction_count
+FROM memories m
+JOIN users u ON u.id = m.author_id
+LEFT JOIN reactions r ON r.memory_id = m.id
+WHERE m.container_type = 'capsule'
+  AND m.container_id = $1
+  AND m.deleted_at IS NULL
+GROUP BY m.id, m.author_id, u.display_name
+ORDER BY reaction_count DESC, m.id
+LIMIT 1
+`
+
+type GetCapsuleRecapMostReactedDetailRow struct {
+	ID            pgtype.UUID
+	AuthorID      pgtype.UUID
+	DisplayName   string
+	ReactionCount int64
+}
+
+func (q *Queries) GetCapsuleRecapMostReactedDetail(ctx context.Context, containerID pgtype.UUID) (GetCapsuleRecapMostReactedDetailRow, error) {
+	row := q.db.QueryRow(ctx, getCapsuleRecapMostReactedDetail, containerID)
+	var i GetCapsuleRecapMostReactedDetailRow
+	err := row.Scan(
+		&i.ID,
+		&i.AuthorID,
+		&i.DisplayName,
+		&i.ReactionCount,
+	)
+	return i, err
+}
+
+const getCapsuleRecapNightOwlShare = `-- name: GetCapsuleRecapNightOwlShare :one
+SELECT (
+    CASE
+        WHEN COUNT(*) = 0 THEN 0::float8
+        ELSE (
+            COUNT(*) FILTER (
+                WHERE EXTRACT(HOUR FROM (COALESCE(m.captured_at, m.created_at) AT TIME ZONE $2::text)) >= 22
+                   OR EXTRACT(HOUR FROM (COALESCE(m.captured_at, m.created_at) AT TIME ZONE $2::text)) < 5
+            )::float8 / COUNT(*)::float8
+        )
+    END
+)::float8 AS night_owl_share
+FROM memories m
+WHERE m.container_type = 'capsule'
+  AND m.container_id = $1
+  AND m.deleted_at IS NULL
+`
+
+type GetCapsuleRecapNightOwlShareParams struct {
+	ContainerID pgtype.UUID
+	Tz          string
+}
+
+// Fraction of captures between 22:00 and 04:59 inclusive in viewer timezone.
+func (q *Queries) GetCapsuleRecapNightOwlShare(ctx context.Context, arg GetCapsuleRecapNightOwlShareParams) (float64, error) {
+	row := q.db.QueryRow(ctx, getCapsuleRecapNightOwlShare, arg.ContainerID, arg.Tz)
+	var night_owl_share float64
+	err := row.Scan(&night_owl_share)
+	return night_owl_share, err
+}
+
+const getCapsuleRecapPeakHour = `-- name: GetCapsuleRecapPeakHour :one
+SELECT
+    EXTRACT(HOUR FROM (COALESCE(m.captured_at, m.created_at) AT TIME ZONE $2::text))::int AS peak_hour,
+    COUNT(*)::bigint AS capture_count
+FROM memories m
+WHERE m.container_type = 'capsule'
+  AND m.container_id = $1
+  AND m.deleted_at IS NULL
+GROUP BY peak_hour
+ORDER BY capture_count DESC, peak_hour ASC
+LIMIT 1
+`
+
+type GetCapsuleRecapPeakHourParams struct {
+	ContainerID pgtype.UUID
+	Tz          string
+}
+
+type GetCapsuleRecapPeakHourRow struct {
+	PeakHour     int32
+	CaptureCount int64
+}
+
+// Hour-of-day (0-23) in the viewer's IANA timezone with the most captures.
+func (q *Queries) GetCapsuleRecapPeakHour(ctx context.Context, arg GetCapsuleRecapPeakHourParams) (GetCapsuleRecapPeakHourRow, error) {
+	row := q.db.QueryRow(ctx, getCapsuleRecapPeakHour, arg.ContainerID, arg.Tz)
+	var i GetCapsuleRecapPeakHourRow
+	err := row.Scan(&i.PeakHour, &i.CaptureCount)
+	return i, err
+}
+
+const getCapsuleRecapSecondContributor = `-- name: GetCapsuleRecapSecondContributor :one
+SELECT m.author_id, u.username, u.display_name, COUNT(*)::bigint AS memory_count
+FROM memories m
+JOIN users u ON u.id = m.author_id
+WHERE m.container_type = 'capsule'
+  AND m.container_id = $1
+  AND m.deleted_at IS NULL
+GROUP BY m.author_id, u.username, u.display_name
+ORDER BY memory_count DESC, m.author_id
+OFFSET 1
+LIMIT 1
+`
+
+type GetCapsuleRecapSecondContributorRow struct {
+	AuthorID    pgtype.UUID
+	Username    string
+	DisplayName string
+	MemoryCount int64
+}
+
+func (q *Queries) GetCapsuleRecapSecondContributor(ctx context.Context, containerID pgtype.UUID) (GetCapsuleRecapSecondContributorRow, error) {
+	row := q.db.QueryRow(ctx, getCapsuleRecapSecondContributor, containerID)
+	var i GetCapsuleRecapSecondContributorRow
+	err := row.Scan(
+		&i.AuthorID,
+		&i.Username,
+		&i.DisplayName,
+		&i.MemoryCount,
+	)
+	return i, err
+}
+
+const getCapsuleRecapViewerContribution = `-- name: GetCapsuleRecapViewerContribution :one
+SELECT
+    COUNT(*)::bigint AS memories_taken,
+    COUNT(*) FILTER (WHERE med.kind = 'photo')::bigint AS photos_taken,
+    COUNT(*) FILTER (WHERE med.kind = 'video')::bigint AS videos_taken,
+    COUNT(*) FILTER (WHERE m.voice_media_id IS NOT NULL)::bigint AS voice_notes_taken
+FROM memories m
+JOIN media med ON med.id = m.media_id
+WHERE m.container_type = 'capsule'
+  AND m.container_id = $1
+  AND m.author_id = $2
+  AND m.deleted_at IS NULL
+`
+
+type GetCapsuleRecapViewerContributionParams struct {
+	ContainerID pgtype.UUID
+	AuthorID    pgtype.UUID
+}
+
+type GetCapsuleRecapViewerContributionRow struct {
+	MemoriesTaken   int64
+	PhotosTaken     int64
+	VideosTaken     int64
+	VoiceNotesTaken int64
+}
+
+// Memories captured by the viewing member (author_id = viewer).
+func (q *Queries) GetCapsuleRecapViewerContribution(ctx context.Context, arg GetCapsuleRecapViewerContributionParams) (GetCapsuleRecapViewerContributionRow, error) {
+	row := q.db.QueryRow(ctx, getCapsuleRecapViewerContribution, arg.ContainerID, arg.AuthorID)
+	var i GetCapsuleRecapViewerContributionRow
+	err := row.Scan(
+		&i.MemoriesTaken,
+		&i.PhotosTaken,
+		&i.VideosTaken,
+		&i.VoiceNotesTaken,
+	)
+	return i, err
+}
+
+const getCapsuleRecapViewerEngagement = `-- name: GetCapsuleRecapViewerEngagement :one
+SELECT
+    (
+        SELECT COUNT(*)::bigint
+        FROM reactions r
+        JOIN memories m ON m.id = r.memory_id
+        WHERE m.container_type = 'capsule'
+          AND m.container_id = $1
+          AND m.author_id <> $2
+          AND r.user_id = $2
+    ) AS reactions_on_others,
+    (
+        SELECT COUNT(*)::bigint
+        FROM comments c
+        JOIN memories m ON m.id = c.memory_id
+        WHERE m.container_type = 'capsule'
+          AND m.container_id = $1
+          AND m.author_id <> $2
+          AND c.author_id = $2
+    ) AS comments_on_others
+`
+
+type GetCapsuleRecapViewerEngagementParams struct {
+	ContainerID pgtype.UUID
+	AuthorID    pgtype.UUID
+}
+
+type GetCapsuleRecapViewerEngagementRow struct {
+	ReactionsOnOthers int64
+	CommentsOnOthers  int64
+}
+
+func (q *Queries) GetCapsuleRecapViewerEngagement(ctx context.Context, arg GetCapsuleRecapViewerEngagementParams) (GetCapsuleRecapViewerEngagementRow, error) {
+	row := q.db.QueryRow(ctx, getCapsuleRecapViewerEngagement, arg.ContainerID, arg.AuthorID)
+	var i GetCapsuleRecapViewerEngagementRow
+	err := row.Scan(&i.ReactionsOnOthers, &i.CommentsOnOthers)
+	return i, err
+}
+
+const getCapsuleRecapViewerNightOwlShare = `-- name: GetCapsuleRecapViewerNightOwlShare :one
+SELECT (
+    CASE
+        WHEN COUNT(*) = 0 THEN 0::float8
+        ELSE (
+            COUNT(*) FILTER (
+                WHERE EXTRACT(HOUR FROM (COALESCE(m.captured_at, m.created_at) AT TIME ZONE $3::text)) >= 22
+                   OR EXTRACT(HOUR FROM (COALESCE(m.captured_at, m.created_at) AT TIME ZONE $3::text)) < 5
+            )::float8 / COUNT(*)::float8
+        )
+    END
+)::float8 AS night_owl_share
+FROM memories m
+WHERE m.container_type = 'capsule'
+  AND m.container_id = $1
+  AND m.author_id = $2
+  AND m.deleted_at IS NULL
+`
+
+type GetCapsuleRecapViewerNightOwlShareParams struct {
+	ContainerID pgtype.UUID
+	AuthorID    pgtype.UUID
+	Tz          string
+}
+
+func (q *Queries) GetCapsuleRecapViewerNightOwlShare(ctx context.Context, arg GetCapsuleRecapViewerNightOwlShareParams) (float64, error) {
+	row := q.db.QueryRow(ctx, getCapsuleRecapViewerNightOwlShare, arg.ContainerID, arg.AuthorID, arg.Tz)
+	var night_owl_share float64
+	err := row.Scan(&night_owl_share)
+	return night_owl_share, err
+}
+
+const getCapsuleRecapViewerPeakHour = `-- name: GetCapsuleRecapViewerPeakHour :one
+SELECT
+    EXTRACT(HOUR FROM (COALESCE(m.captured_at, m.created_at) AT TIME ZONE $3::text))::int AS peak_hour,
+    COUNT(*)::bigint AS capture_count
+FROM memories m
+WHERE m.container_type = 'capsule'
+  AND m.container_id = $1
+  AND m.author_id = $2
+  AND m.deleted_at IS NULL
+GROUP BY peak_hour
+ORDER BY capture_count DESC, peak_hour ASC
+LIMIT 1
+`
+
+type GetCapsuleRecapViewerPeakHourParams struct {
+	ContainerID pgtype.UUID
+	AuthorID    pgtype.UUID
+	Tz          string
+}
+
+type GetCapsuleRecapViewerPeakHourRow struct {
+	PeakHour     int32
+	CaptureCount int64
+}
+
+func (q *Queries) GetCapsuleRecapViewerPeakHour(ctx context.Context, arg GetCapsuleRecapViewerPeakHourParams) (GetCapsuleRecapViewerPeakHourRow, error) {
+	row := q.db.QueryRow(ctx, getCapsuleRecapViewerPeakHour, arg.ContainerID, arg.AuthorID, arg.Tz)
+	var i GetCapsuleRecapViewerPeakHourRow
+	err := row.Scan(&i.PeakHour, &i.CaptureCount)
+	return i, err
+}
+
+const getCapsuleRecapViewerRank = `-- name: GetCapsuleRecapViewerRank :one
+WITH counts AS (
+    SELECT author_id, COUNT(*)::bigint AS memory_count
+    FROM memories
+    WHERE container_type = 'capsule'
+      AND container_id = $1
+      AND deleted_at IS NULL
+    GROUP BY author_id
+),
+ranked AS (
+    SELECT
+        author_id,
+        memory_count,
+        RANK() OVER (ORDER BY memory_count DESC, author_id) AS rank,
+        COUNT(*) OVER ()::bigint AS contributor_count
+    FROM counts
+)
+SELECT rank, memory_count, contributor_count
+FROM ranked
+WHERE author_id = $2
+`
+
+type GetCapsuleRecapViewerRankParams struct {
+	ContainerID pgtype.UUID
+	AuthorID    pgtype.UUID
+}
+
+type GetCapsuleRecapViewerRankRow struct {
+	Rank             int64
+	MemoryCount      int64
+	ContributorCount int64
+}
+
+func (q *Queries) GetCapsuleRecapViewerRank(ctx context.Context, arg GetCapsuleRecapViewerRankParams) (GetCapsuleRecapViewerRankRow, error) {
+	row := q.db.QueryRow(ctx, getCapsuleRecapViewerRank, arg.ContainerID, arg.AuthorID)
+	var i GetCapsuleRecapViewerRankRow
+	err := row.Scan(&i.Rank, &i.MemoryCount, &i.ContributorCount)
+	return i, err
+}
+
 const getCapsuleUnlockStats = `-- name: GetCapsuleUnlockStats :one
 SELECT
     COUNT(*)::bigint AS total_memories,

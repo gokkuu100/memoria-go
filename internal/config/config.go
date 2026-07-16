@@ -50,6 +50,10 @@ type Config struct {
 	// Optional observability (B11).
 	SentryDSN string
 
+	// MetricsKey protects GET /v1/metrics/summary (founder dashboard).
+	// Empty in production disables the route; development defaults to dev-metrics-key.
+	MetricsKey string
+
 	// Postgres pool sizing (default 20).
 	DBMaxConns int32
 }
@@ -83,6 +87,7 @@ func Load() (*Config, error) {
 		RevenueCatProductPro:    getenv("REVENUECAT_PRODUCT_PRO", "memoria_pro"),
 
 		SentryDSN:  os.Getenv("SENTRY_DSN"),
+		MetricsKey: os.Getenv("METRICS_API_KEY"),
 		DBMaxConns: int32(getenvInt("DB_MAX_CONNS", 20)),
 	}
 
@@ -124,6 +129,9 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("REVENUECAT_WEBHOOK_SECRET is required in production")
 		}
 		cfg.RevenueCatWebhookSecret = "dev-revenuecat-webhook-secret"
+	}
+	if cfg.MetricsKey == "" && cfg.Env == EnvDevelopment {
+		cfg.MetricsKey = "dev-metrics-key"
 	}
 	return cfg, nil
 }

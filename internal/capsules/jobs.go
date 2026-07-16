@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"memoria-backend/internal/analytics"
 	"memoria-backend/internal/billing"
 	"memoria-backend/internal/dbgen"
 	"memoria-backend/internal/notifications"
@@ -27,6 +28,10 @@ func ExpireInvites(ctx context.Context, q *dbgen.Queries, notify notifications.S
 			slog.Error("capsules job: disintegrating expired invite", "capsule", pg.UUIDValue(cap.ID), "error", err)
 			continue
 		}
+		analytics.TrackUser(pg.UUIDValue(cap.CreatorID), analytics.EventCapsuleDisintegrated, map[string]any{
+			"capsule_id":   pg.UUIDValue(cap.ID).String(),
+			"capsule_type": cap.Type,
+		})
 		if notify != nil {
 			notify.CapsuleInviteExpired(ctx, pg.UUIDValue(cap.CreatorID), pg.UUIDValue(cap.ID), cap.Name)
 		}
@@ -68,6 +73,10 @@ func RunFreeze(ctx context.Context, q *dbgen.Queries, notify notifications.Sende
 			slog.Error("capsules job: freezing capsule", "capsule", pg.UUIDValue(cap.ID), "error", err)
 			continue
 		}
+		analytics.TrackUser(pg.UUIDValue(cap.CreatorID), analytics.EventCapsuleFrozen, map[string]any{
+			"capsule_id":   pg.UUIDValue(cap.ID).String(),
+			"capsule_type": cap.Type,
+		})
 		members, err := q.ListCapsuleMemberUserIDs(ctx, cap.ID)
 		if err != nil {
 			continue
@@ -137,6 +146,10 @@ func RunUnlock(ctx context.Context, q *dbgen.Queries, notify notifications.Sende
 			}
 			notify.RefreshWidgetForUsers(ctx, widgetUsers)
 		}
+		analytics.TrackUser(pg.UUIDValue(row.CreatorID), analytics.EventCapsuleUnlocked, map[string]any{
+			"capsule_id":   pg.UUIDValue(row.ID).String(),
+			"capsule_type": row.Type,
+		})
 		_ = unlocked
 	}
 	return nil

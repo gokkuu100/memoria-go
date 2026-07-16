@@ -571,6 +571,30 @@ func TestFullExitScenario(t *testing.T) {
 	if status := doJSON(t, "GET", e.ts.URL+"/v1/capsules/"+capID+"/stats", tokenA, nil, &stats); status != http.StatusOK {
 		t.Fatalf("stats: status %d", status)
 	}
+
+	var recap map[string]any
+	if status := doJSON(t, "GET", e.ts.URL+"/v1/capsules/"+capID+"/recap", tokenA, nil, &recap); status != http.StatusOK {
+		t.Fatalf("recap: status %d", status)
+	}
+	if recap["total_memories"] == nil || recap["days_sealed"] == nil {
+		t.Fatalf("recap missing core fields: %#v", recap)
+	}
+	if _, ok := recap["peak_hour_local"]; !ok {
+		t.Fatalf("recap missing peak_hour_local: %#v", recap)
+	}
+	if _, ok := recap["top_contributor"]; !ok {
+		t.Fatalf("recap missing top_contributor: %#v", recap)
+	}
+	if _, ok := recap["viewer"]; !ok {
+		t.Fatalf("recap missing viewer block: %#v", recap)
+	}
+	if _, ok := recap["facts"]; !ok {
+		t.Fatalf("recap missing facts map: %#v", recap)
+	}
+	viewer, _ := recap["viewer"].(map[string]any)
+	if viewer["memories_taken"] == nil {
+		t.Fatalf("recap viewer missing memories_taken: %#v", viewer)
+	}
 }
 
 func TestViewableUntilFromCreatorPlan(t *testing.T) {
