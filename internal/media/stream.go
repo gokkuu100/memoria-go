@@ -11,6 +11,10 @@ import (
 )
 
 // StreamReady writes a ready media object's bytes to the response.
+//
+// We intentionally stream through the API (not 302 to a signed URL): native
+// image loaders forward the Authorization header on redirect, and MinIO then
+// rejects the signed GET with 400 — which shows up as a black viewer slide.
 func StreamReady(w http.ResponseWriter, r *http.Request, store *Store, row dbgen.Medium) {
 	if row.Status != "ready" {
 		httpx.Error(w, http.StatusConflict, "media_not_ready", "media is not ready")

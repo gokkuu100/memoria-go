@@ -11,15 +11,17 @@ import (
 )
 
 const (
-	globalIPLimit   = 100
-	globalIPWindow  = time.Minute
-	globalUserLimit = 300
+	// Raised from 100: a single viewer session fires media redirects + reactions
+	// per swipe; behind a misconfigured proxy this was one shared bucket for all users.
+	globalIPLimit    = 600
+	globalIPWindow   = time.Minute
+	globalUserLimit  = 900
 	globalUserWindow = time.Minute
 )
 
-// RateLimitIP applies the global per-IP sliding-window limit. Health probes are
-// excluded so orchestrators are not throttled. Disabled in development so local
-// integration tests are not starved on a shared httptest server.
+// RateLimitIP applies the global per-IP sliding-window limit. Health probes and
+// authenticated media redirects are excluded (bytes come from object storage).
+// Disabled in development so local integration tests are not starved.
 func RateLimitIP(limiter *auth.Limiter, env config.Env) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -27,7 +29,7 @@ func RateLimitIP(limiter *auth.Limiter, env config.Env) func(http.Handler) http.
 				next.ServeHTTP(w, r)
 				return
 			}
-			if r.Method == http.MethodOptions || isHealthProbe(r.URL.Path) {
+			if r.Method == http.MethodOptions || isHealthProbe(r.URL.Path) || isMediaStreamPath(r.URL.Path) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -52,6 +54,10 @@ func RateLimitUser(limiter *auth.Limiter, env config.Env) func(http.Handler) htt
 				next.ServeHTTP(w, r)
 				return
 			}
+			if isMediaStreamPath(r.URL.Path) {
+				next.ServeHTTP(w, r)
+				return
+			}
 			userID, ok := httpx.UserID(r.Context())
 			if !ok {
 				next.ServeHTTP(w, r)
@@ -68,6 +74,13 @@ func RateLimitUser(limiter *auth.Limiter, env config.Env) func(http.Handler) htt
 
 func isHealthProbe(path string) bool {
 	return path == "/healthz" || path == "/readyz"
+}
+
+// isMediaStreamPath matches GET …/memories/{id}/media|voice redirects. These are
+// membership-gated and only issue a short 302; counting them in the IP bucket
+// made swiping a photo viewer hit rate limits almost immediately.
+func isMediaStreamPath(path string) bool {
+	return strings.HasSuffix(path, "/media") || strings.HasSuffix(path, "/voice")
 }
 
 // ClientIPFromTrustedProxy returns the client IP when the request passes through

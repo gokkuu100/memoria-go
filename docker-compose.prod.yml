@@ -7,7 +7,7 @@ services:
     environment:
       ENV: production
       S3_ENDPOINT: http://minio:9000
-      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-https://memoriago.duckdns.org:9000}
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-https://memoriago.duckdns.org}
     restart: unless-stopped
 
   postgres:

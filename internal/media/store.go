@@ -53,6 +53,10 @@ func NewStore(ctx context.Context, cfg *config.Config) (*Store, error) {
 		return s3.NewFromConfig(awsCfg, func(o *s3.Options) {
 			o.BaseEndpoint = aws.String(endpoint)
 			o.UsePathStyle = cfg.S3UsePathStyle
+			// Newer SDKs default to signing checksum mode into GET URLs; MinIO
+			// + mobile clients are happier without it.
+			o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
+			o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
 		})
 	}
 
@@ -91,6 +95,8 @@ func (s *Store) presignClientFor(endpoint string) *s3.PresignClient {
 	client := s3.NewFromConfig(s.awsCfg, func(o *s3.Options) {
 		o.BaseEndpoint = aws.String(endpoint)
 		o.UsePathStyle = s.usePathStyle
+		o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
+		o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
 	})
 	return s3.NewPresignClient(client)
 }
@@ -166,7 +172,7 @@ func (s *Store) Open(ctx context.Context, key string) (io.ReadCloser, error) {
 	}
 	return out.Body, nil
 }
-
+	
 // Delete removes the object; deleting a missing key is not an error.
 func (s *Store) Delete(ctx context.Context, key string) error {
 	_, err := s.internal.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: &s.bucket, Key: &key})

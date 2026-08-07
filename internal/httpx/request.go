@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -20,12 +21,26 @@ func Decode(r *http.Request, v any) error {
 	return nil
 }
 
-// ClientIP returns the remote address without the port. Behind the production
-// reverse proxy this is the proxy-provided peer address (configured in B11).
+// ClientIP returns the client address for rate limiting and logs.
+// When a trusted reverse proxy (Caddy) sets X-Forwarded-For / X-Real-IP,
+// prefer that — otherwise every request looks like the docker bridge IP and
+// all users share one global IP rate-limit bucket.
 func ClientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if ip := strings.TrimSpace(strings.Split(xff, ",")[0]); ip != "" {
+			return stripPort(ip)
+		}
+	}
+	if xri := strings.TrimSpace(r.Header.Get("X-Real-IP")); xri != "" {
+		return stripPort(xri)
+	}
+	return stripPort(r.RemoteAddr)
+}
+
+func stripPort(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
-		return r.RemoteAddr
+		return addr
 	}
 	return host
 }

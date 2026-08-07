@@ -7,7 +7,7 @@ export
 DATABASE_URL ?= postgres://memoria:memoria@localhost:5432/memoria?sslmode=disable
 MIGRATIONS_DIR := db/migrations
 
-.PHONY: help up down logs build run test lint sqlc migrate-up migrate-down migrate-status migrate-new tools openapi-validate
+.PHONY: help up down logs build run test lint sqlc migrate-up migrate-down migrate-status migrate-new tools openapi-validate seed-summertides
 
 help: ## List targets
 	@grep -E '^[a-zA-Z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-15s %s\n", $$1, $$2}'
@@ -57,3 +57,6 @@ tools: ## Install dev tools (goose, sqlc, golangci-lint)
 openapi-validate: ## Parse-check openapi.yaml
 	@python3 -c "import yaml; yaml.safe_load(open('openapi.yaml')); print('openapi.yaml OK')" 2>/dev/null \
 		|| (grep -q '^openapi:' openapi.yaml && grep -q '^paths:' openapi.yaml && echo 'openapi.yaml structure OK (pip install pyyaml for full YAML parse)')
+
+seed-summertides: ## Seed marketing capsule Summertides 2026 (Recap screenshots)
+	./scripts/seed_summertides_recap.sh
