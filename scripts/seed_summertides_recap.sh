@@ -71,7 +71,7 @@ INSERT INTO users (email, username, display_name, password_hash, timezone, plan)
 VALUES (
   'demo_user@memoria.local',
   'demo_user',
-  'Prince',
+  'Demo',
   '{h}',
   '{tz}',
   'spark'
@@ -100,7 +100,7 @@ outdir, hash_, uid, tz = sys.argv[1:5]
 h = hash_.replace("'", "''")
 pathlib.Path(outdir, "update_prince.sql").write_text(f"""
 UPDATE users
-SET display_name = 'Prince',
+SET display_name = 'Demo',
     timezone = '{tz}',
     password_hash = '{h}'
 WHERE id = '{uid}'::uuid;

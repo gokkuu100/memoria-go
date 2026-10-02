@@ -4,10 +4,11 @@
 # Usage (from anywhere):
 #   ./memoria-gobackend/scripts/deploy-production.sh
 #
-# Optional env overrides:
-#   DEPLOY_HOST=ubuntu@203.0.113.10
-#   DEPLOY_PATH=/opt/memoria/memoria-gobackend
+# Required env:
+#   DEPLOY_HOST=user@your-server
 #   SSH_KEY=/path/to/deploy-key.pem
+# Optional:
+#   DEPLOY_PATH=/opt/memoria/memoria-gobackend
 #   HEALTH_URL=https://memoriago.duckdns.org/readyz
 #   SKIP_BUILD=1          # rsync + restart only (no --build)
 #   RSYNC_DRY_RUN=1       # preview rsync changes
@@ -18,17 +19,21 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$BACKEND_DIR/.." && pwd)"
 
-DEPLOY_HOST="${DEPLOY_HOST:-ubuntu@203.0.113.10}"
+DEPLOY_HOST="${DEPLOY_HOST:-}"
 DEPLOY_PATH="${DEPLOY_PATH:-/opt/memoria/memoria-gobackend}"
-SSH_KEY="${SSH_KEY:-$REPO_ROOT/deploy-key.pem}"
+SSH_KEY="${SSH_KEY:-}"
 HEALTH_URL="${HEALTH_URL:-https://memoriago.duckdns.org/readyz}"
+
+if [[ -z "$DEPLOY_HOST" || -z "$SSH_KEY" ]]; then
+  echo "error: set DEPLOY_HOST=user@your-server and SSH_KEY=/path/to/deploy-key.pem" >&2
+  exit 1
+fi
 
 SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=20)
 if [[ -n "$SSH_KEY" ]]; then
   if [[ ! -f "$SSH_KEY" ]]; then
     echo "error: SSH key not found: $SSH_KEY" >&2
-    echo "Set SSH_KEY to your .pem path, e.g.:" >&2
-    echo "  SSH_KEY=$REPO_ROOT/deploy-key.pem $0" >&2
+    echo "Set SSH_KEY to your private key path." >&2
     exit 1
   fi
   chmod 400 "$SSH_KEY" 2>/dev/null || true
